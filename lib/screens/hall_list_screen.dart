@@ -2,16 +2,24 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import '../data/seed_data.dart';
+import '../models/equipment_query.dart';
 import '../models/hall_query.dart';
 import '../models/studio_hall.dart';
+import '../repositories/booking_repository.dart';
+import '../repositories/equipment_repository.dart';
+import '../state/catalog_notifier.dart';
+import '../state/session.dart';
+import '../state/list_notifier.dart';
 import '../state/list_notifiers.dart';
 import '../widgets/common.dart';
 import '../widgets/entity_table.dart';
+import '../widgets/state_views.dart';
+import '../widgets/record_actions.dart';
 
 class HallListScreen extends StatefulWidget {
   final HallQuery query;
   const HallListScreen({super.key, required this.query});
+
   @override
   State<HallListScreen> createState() => _HallListScreenState();
 }
@@ -33,212 +41,235 @@ class _HallListScreenState extends State<HallListScreen> {
     }
   }
 
-  void _sync() => context.read<HallListNotifier>().applyQuery(widget.query);
-  void _go(HallQuery q) {
-    final p = q.toQueryParameters();
-    context.go(p.isEmpty
-        ? '/halls'
-        : Uri(path: '/halls', queryParameters: p).toString());
-  }
-
   @override
   void dispose() {
     _timer?.cancel();
     super.dispose();
   }
 
+  void _sync() => context.read<HallListNotifier>().applyQuery(widget.query);
+  void _go(HallQuery query) {
+    final parameters = query.toQueryParameters();
+    context.go(parameters.isEmpty
+        ? '/halls'
+        : Uri(path: '/halls', queryParameters: parameters).toString());
+  }
+
   @override
   Widget build(BuildContext context) {
-    final n = context.watch<HallListNotifier>();
+    final notifier = context.watch<HallListNotifier>();
+    final catalog = context.watch<CatalogNotifier>();
     return AppScaffold(
-        title: 'Залы фотостудии',
-        index: 0,
-        child: Column(children: [
-          _filters(n),
-          if (n.hasSelection) _selection(n),
-          Expanded(child: _body(n)),
-          if (n.status == LoadStatus.success && n.result.total > 0)
-            Pager(
-                page: n.result.page,
-                totalPages: n.result.totalPages,
-                total: n.result.total,
-                size: n.result.size,
-                onPage: (v) => _go(n.query.copyWith(page: v)),
-                onSize: (v) => _go(n.query.copyWith(size: v)))
-        ]));
+      title: 'Залы студии',
+      onRefresh: () => context.read<HallListNotifier>().load(),
+      index: 1,
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: CreateButton(
+                label: 'Новый зал', onPressed: () => context.go('/halls/new')),
+          ),
+        ),
+        const ReadOnlyNotice(),
+        _filters(notifier, catalog),
+        if (notifier.hasSelection) _selection(notifier),
+        Expanded(child: _body(notifier, catalog)),
+        if (notifier.status == LoadStatus.success && notifier.result.total > 0)
+          Pager(
+              page: notifier.result.page,
+              totalPages: notifier.result.totalPages,
+              total: notifier.result.total,
+              size: notifier.result.size,
+              onPage: (value) => _go(notifier.query.copyWith(page: value)),
+              onSize: (value) => _go(notifier.query.copyWith(size: value))),
+      ]),
+    );
   }
 
-  Widget _filters(HallListNotifier n) {
-    final q = widget.query;
+  Widget _filters(HallListNotifier notifier, CatalogNotifier catalog) {
+    final query = widget.query;
     return Padding(
-        padding: const EdgeInsets.all(12),
-        child: Wrap(spacing: 10, runSpacing: 10, children: [
-          SizedBox(
-              width: 260,
-              child: TextFormField(
-                  initialValue: q.search,
-                  decoration: const InputDecoration(
-                      labelText: 'Поиск: зал или код',
-                      border: OutlineInputBorder()),
-                  onChanged: (v) {
-                    _timer?.cancel();
-                    _timer = Timer(const Duration(milliseconds: 350),
-                        () => _go(q.copyWith(search: v)));
-                  })),
-          SizedBox(
-              width: 180,
-              child: DropdownButtonFormField<String?>(
-                  value: q.style,
-                  decoration: const InputDecoration(
-                      labelText: 'Стиль', border: OutlineInputBorder()),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                        value: null, child: Text('Все стили')),
-                    ...hallStyles.map((v) =>
-                        DropdownMenuItem<String?>(value: v, child: Text(v)))
-                  ],
-                  onChanged: (v) => _go(q.copyWith(style: v)))),
-          SizedBox(
-              width: 115,
-              child: TextFormField(
-                  initialValue: q.capacityFrom?.toString(),
-                  decoration: const InputDecoration(
-                      labelText: 'Мест от', border: OutlineInputBorder()),
-                  keyboardType: TextInputType.number,
-                  onFieldSubmitted: (v) =>
-                      _go(q.copyWith(capacityFrom: int.tryParse(v))))),
-          SizedBox(
-              width: 115,
-              child: TextFormField(
-                  initialValue: q.capacityTo?.toString(),
-                  decoration: const InputDecoration(
-                      labelText: 'Мест до', border: OutlineInputBorder()),
-                  keyboardType: TextInputType.number,
-                  onFieldSubmitted: (v) =>
-                      _go(q.copyWith(capacityTo: int.tryParse(v))))),
-          SizedBox(
-              width: 120,
-              child: TextFormField(
-                  initialValue: q.priceFrom?.toString(),
-                  decoration: const InputDecoration(
-                      labelText: 'Цена от', border: OutlineInputBorder()),
-                  keyboardType: TextInputType.number,
-                  onFieldSubmitted: (v) =>
-                      _go(q.copyWith(priceFrom: int.tryParse(v))))),
-          SizedBox(
-              width: 120,
-              child: TextFormField(
-                  initialValue: q.priceTo?.toString(),
-                  decoration: const InputDecoration(
-                      labelText: 'Цена до', border: OutlineInputBorder()),
-                  keyboardType: TextInputType.number,
-                  onFieldSubmitted: (v) =>
-                      _go(q.copyWith(priceTo: int.tryParse(v))))),
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            Switch(
-                value: q.includeDeleted,
-                onChanged: (v) => _go(q.copyWith(includeDeleted: v))),
-            const Text('Удалённые')
-          ]),
-          TextButton(
-              onPressed: q.hasActiveFilters
-                  ? () => _go(HallQuery(
-                      size: q.size,
-                      sortField: q.sortField,
-                      sortAscending: q.sortAscending))
-                  : null,
-              child: const Text('Сбросить'))
-        ]));
+      padding: const EdgeInsets.all(12),
+      child: Wrap(spacing: 10, runSpacing: 10, children: [
+        SizedBox(
+            width: 280,
+            child: TextFormField(
+                initialValue: query.search,
+                decoration: const InputDecoration(
+                    labelText: 'Поиск: название или код',
+                    border: OutlineInputBorder()),
+                onChanged: (value) {
+                  _timer?.cancel();
+                  _timer = Timer(const Duration(milliseconds: 350),
+                      () => _go(query.copyWith(search: value)));
+                })),
+        SizedBox(
+            width: 230,
+            child: DropdownButtonFormField<String?>(
+                value: query.style,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                    labelText: 'Стиль', border: OutlineInputBorder()),
+                items: [
+                  const DropdownMenuItem<String?>(
+                      value: null, child: Text('Все стили')),
+                  for (final style in catalog.hallStyles)
+                    DropdownMenuItem<String?>(value: style, child: Text(style)),
+                ],
+                onChanged: (value) => _go(query.copyWith(style: value)))),
+        _numberField('Мест от', query.capacityFrom,
+            (value) => _go(query.copyWith(capacityFrom: value))),
+        _numberField('Мест до', query.capacityTo,
+            (value) => _go(query.copyWith(capacityTo: value))),
+        _numberField('Цена от', query.priceFrom,
+            (value) => _go(query.copyWith(priceFrom: value))),
+        _numberField('Цена до', query.priceTo,
+            (value) => _go(query.copyWith(priceTo: value))),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Switch(
+              value: query.includeDeleted,
+              onChanged: (value) => _go(query.copyWith(includeDeleted: value))),
+          const Text('Удалённые')
+        ]),
+        TextButton(
+            onPressed: query.hasActiveFilters
+                ? () => _go(HallQuery(
+                    size: query.size,
+                    sortField: query.sortField,
+                    sortAscending: query.sortAscending))
+                : null,
+            child: const Text('Сбросить')),
+      ]),
+    );
   }
 
-  Widget _selection(HallListNotifier n) => Padding(
-      padding: const EdgeInsets.all(8),
-      child: Wrap(spacing: 8, children: [
-        Text('Выбрано: ${n.selected.length}'),
-        FilledButton(
-            onPressed: () async {
-              if (await confirm(context, 'Удалить выбранные залы?')) {
-                await n.deleteSelected(false);
-              }
-            },
-            child: const Text('Удалить')),
-        OutlinedButton(
-            onPressed: () async {
-              if (await confirm(context, 'Стереть выбранные залы?',
-                  hard: true)) {
-                await n.deleteSelected(true);
-              }
-            },
-            child: const Text('Стереть навсегда')),
-        TextButton(onPressed: n.clear, child: const Text('Снять выделение'))
-      ]));
-  Widget _body(HallListNotifier n) {
-    if (n.status == LoadStatus.idle || n.status == LoadStatus.loading) {
-      return const Center(child: CircularProgressIndicator());
+  Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
+      SizedBox(
+          width: 140,
+          child: TextFormField(
+              initialValue: value?.toString(),
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                  labelText: label, border: OutlineInputBorder()),
+              onFieldSubmitted: (text) => onChanged(int.tryParse(text))));
+  Widget _selection(HallListNotifier notifier) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: BulkActions(
+          count: notifier.selected.length,
+          onDelete: () async {
+            if (await confirm(context, 'Удалить выбранные залы?')) {
+              await notifier.deleteSelected();
+            }
+          },
+          onErase: () async {
+            if (await confirm(context, 'Стереть выбранные залы?', hard: true)) {
+              await notifier.eraseSelected();
+            }
+          },
+          onClearSelection: notifier.clearSelection,
+        ),
+      );
+  Widget _body(HallListNotifier notifier, CatalogNotifier catalog) {
+    if (notifier.status != LoadStatus.success) {
+      return ListStateView(notifier: notifier);
     }
-    if (n.status == LoadStatus.error) {
-      return StatusView(text: n.error ?? 'Ошибка', error: true, retry: n.load);
-    }
-    if (n.result.items.isEmpty) {
-      return const StatusView(text: 'Залы по заданным условиям не найдены.');
+    if (notifier.result.items.isEmpty) {
+      return EmptyView(
+        message: 'Залы по заданным условиям не найдены',
+        hint: 'Попробуйте другое название или снимите фильтры.',
+      );
     }
     if (MediaQuery.sizeOf(context).width < compactWidth) {
-      return ListView(children: [for (final h in n.result.items) _card(n, h)]);
+      return ListView(
+          children: [for (final item in notifier.result.items) _card(item)]);
     }
     return EntityTable<StudioHall>(
-        items: n.result.items,
-        id: (h) => h.id,
-        selected: n.selected,
-        toggle: n.toggle,
-        sort: n.query.sortField,
-        asc: n.query.sortAscending,
-        onSort: (f) => _go(n.query.copyWith(
-            sortField: f,
-            sortAscending:
-                f == n.query.sortField ? !n.query.sortAscending : true)),
-        columns: [
-          (
-            'Название',
-            'name',
-            (h) => Text(h.isDeleted ? '${h.name} (удалён)' : h.name)
-          ),
-          ('Код', null, (h) => Text(h.code)),
-          ('Стиль', 'style', (h) => Text(h.style)),
-          ('Вместимость', 'capacity', (h) => Text('${h.capacity}')),
-          ('Цена/час', 'hourlyRate', (h) => Text('${h.hourlyRate} ₽'))
-        ],
-        actions: (h) => _actions(n, h));
+      items: notifier.result.items,
+      id: (item) => item.id,
+      selected: notifier.selected,
+      toggle: notifier.toggle,
+      sort: notifier.query.sortField,
+      asc: notifier.query.sortAscending,
+      onSort: (field) => _go(notifier.query.copyWith(
+          sortField: field,
+          sortAscending: field == notifier.query.sortField
+              ? !notifier.query.sortAscending
+              : true)),
+      columns: [
+        (
+          'Название',
+          'name',
+          (item) => Text('${item.name}${item.isDeleted ? ' (удалён)' : ''}')
+        ),
+        ('Код', null, (item) => Text(item.code)),
+        ('Стиль', 'style', (item) => Text(item.style)),
+        ('Мест', 'capacity', (item) => Text('${item.capacity}')),
+        ('Цена/час', 'hourlyRate', (item) => Text('${item.hourlyRate} ₽')),
+        ('Брони', null, (item) => Text('${item.bookingIds.length}')),
+        ('Оборуд.', null, (item) => Text('${item.equipmentIds.length}')),
+      ],
+      actions: (item) => _actions(item),
+    );
   }
 
-  Widget _card(HallListNotifier n, StudioHall h) => Card(
-      child: ListTile(
+  Widget _card(StudioHall item) => Card(
+        child: ListTile(
           leading: Checkbox(
-              value: n.selected.contains(h.id),
-              onChanged: (_) => n.toggle(h.id)),
-          title: Text(h.name),
-          subtitle: Text(
-              '${h.code} • ${h.style}\n${h.capacity} чел. • ${h.hourlyRate} ₽/час'),
+              value:
+                  context.watch<HallListNotifier>().selected.contains(item.id),
+              onChanged: (_) =>
+                  context.read<HallListNotifier>().toggle(item.id)),
+          title: Text(item.name),
+          subtitle: Text('${item.code} · ${item.style}\n'
+              '${item.capacity} чел. · ${item.hourlyRate} ₽/час\n'
+              'Бронирований: ${item.bookingIds.length} · '
+              'Оборудования: ${item.equipmentIds.length}'
+              '${item.isDeleted ? ' · удалён' : ''}'),
           isThreeLine: true,
-          trailing: Wrap(children: _actions(n, h))));
-  List<Widget> _actions(HallListNotifier n, StudioHall h) => [
-        if (h.isDeleted)
-          IconButton(
-              onPressed: () => n.restore(h.id), icon: const Icon(Icons.restore))
-        else
-          IconButton(
-              onPressed: () async {
-                if (await confirm(context, 'Удалить зал «${h.name}»?')) {
-                  await n.softDelete(h.id);
-                }
-              },
-              icon: const Icon(Icons.delete_outline)),
-        IconButton(
-            onPressed: () async {
-              if (await confirm(context, 'Стереть зал «${h.name}»?',
-                  hard: true)) {
-                await n.hardDelete(h.id);
-              }
-            },
-            icon: const Icon(Icons.delete_forever))
+          trailing: Wrap(children: _actions(item)),
+        ),
+      );
+  List<Widget> _actions(StudioHall item) => RecordActions.buttons(
+        permissions: context.watch<SessionStore>().permissions,
+        onEdit: () => context.go('/halls/${item.id}/edit'),
+        isDeleted: item.isDeleted,
+        onSoftDelete: () => _delete(item, hard: false),
+        onRestore: () => context.read<HallListNotifier>().restore(item.id),
+        onHardDelete: () => _delete(item, hard: true),
+      );
+  Future<void> _delete(StudioHall item, {required bool hard}) async {
+    final bookingRepository = context.read<BookingRepository>();
+    final equipmentRepository = context.read<EquipmentRepository>();
+    final halls = context.read<HallListNotifier>();
+    final catalog = context.read<CatalogNotifier>();
+    final bookings = await bookingRepository.countForHall(item.id);
+    final equipment = (await equipmentRepository
+            .find(EquipmentQuery(hallId: item.id, size: 50)))
+        .items
+        .where((row) => !row.isDeleted)
+        .length;
+    if (bookings > 0 || equipment > 0) {
+      if (!mounted) return;
+      final parts = <String>[
+        if (bookings > 0) 'бронирований — $bookings',
+        if (equipment > 0) 'оборудования — $equipment',
       ];
+      toast(context,
+          'Нельзя удалить зал «${item.name}»: он используется (${parts.join(', ')})');
+      return;
+    }
+    if (!mounted) return;
+    if (await confirm(context,
+        hard ? 'Стереть зал «${item.name}»?' : 'Удалить зал «${item.name}»?',
+        hard: hard)) {
+      if (hard) {
+        await halls.hardDelete(item.id);
+      } else {
+        await halls.softDelete(item.id);
+      }
+      await catalog.load();
+    }
+  }
 }

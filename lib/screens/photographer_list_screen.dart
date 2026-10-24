@@ -2,26 +2,32 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import '../data/seed_data.dart';
 import '../models/photographer.dart';
 import '../models/photographer_query.dart';
+import '../repositories/booking_repository.dart';
+import '../state/catalog_notifier.dart';
+import '../state/session.dart';
+import '../state/list_notifier.dart';
 import '../state/list_notifiers.dart';
 import '../widgets/common.dart';
 import '../widgets/entity_table.dart';
+import '../widgets/state_views.dart';
+import '../widgets/record_actions.dart';
 
 class PhotographerListScreen extends StatefulWidget {
   final PhotographerQuery query;
   const PhotographerListScreen({super.key, required this.query});
+
   @override
   State<PhotographerListScreen> createState() => _PhotographerListScreenState();
 }
 
 class _PhotographerListScreenState extends State<PhotographerListScreen> {
-  Timer? timer;
+  Timer? _timer;
   @override
   void initState() {
     super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) => sync());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
   }
 
   @override
@@ -29,186 +35,266 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
     super.didUpdateWidget(old);
     if (old.query.toQueryParameters().toString() !=
         widget.query.toQueryParameters().toString()) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => sync());
+      WidgetsBinding.instance.addPostFrameCallback((_) => _sync());
     }
-  }
-
-  void sync() =>
-      context.read<PhotographerListNotifier>().applyQuery(widget.query);
-  void go(PhotographerQuery q) {
-    final p = q.toQueryParameters();
-    context.go(p.isEmpty
-        ? '/photographers'
-        : Uri(path: '/photographers', queryParameters: p).toString());
   }
 
   @override
   void dispose() {
-    timer?.cancel();
+    _timer?.cancel();
     super.dispose();
   }
 
+  void _sync() =>
+      context.read<PhotographerListNotifier>().applyQuery(widget.query);
+  void _go(PhotographerQuery query) {
+    final parameters = query.toQueryParameters();
+    context.go(parameters.isEmpty
+        ? '/photographers'
+        : Uri(path: '/photographers', queryParameters: parameters).toString());
+  }
+
   @override
-  Widget build(BuildContext c) {
-    final n = c.watch<PhotographerListNotifier>();
+  Widget build(BuildContext context) {
+    final notifier = context.watch<PhotographerListNotifier>();
+    final catalog = context.watch<CatalogNotifier>();
     return AppScaffold(
-        title: 'Фотографы',
-        index: 1,
-        child: Column(children: [
-          filters(n),
-          if (n.hasSelection) selection(n),
-          Expanded(child: body(n)),
-          if (n.status == LoadStatus.success && n.result.total > 0)
-            Pager(
-                page: n.result.page,
-                totalPages: n.result.totalPages,
-                total: n.result.total,
-                size: n.result.size,
-                onPage: (x) => go(n.query.copyWith(page: x)),
-                onSize: (x) => go(n.query.copyWith(size: x)))
-        ]));
+      title: 'Фотографы',
+      onRefresh: () => context.read<PhotographerListNotifier>().load(),
+      index: 2,
+      child: Column(children: [
+        Padding(
+          padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: CreateButton(
+                label: 'Новый фотограф',
+                onPressed: () => context.go('/photographers/new')),
+          ),
+        ),
+        const ReadOnlyNotice(),
+        _filters(notifier, catalog),
+        if (notifier.hasSelection) _selection(notifier),
+        Expanded(child: _body(notifier, catalog)),
+        if (notifier.status == LoadStatus.success && notifier.result.total > 0)
+          Pager(
+              page: notifier.result.page,
+              totalPages: notifier.result.totalPages,
+              total: notifier.result.total,
+              size: notifier.result.size,
+              onPage: (value) => _go(notifier.query.copyWith(page: value)),
+              onSize: (value) => _go(notifier.query.copyWith(size: value))),
+      ]),
+    );
   }
 
-  Widget filters(PhotographerListNotifier n) {
-    final q = widget.query;
+  Widget _filters(PhotographerListNotifier notifier, CatalogNotifier catalog) {
+    final query = widget.query;
     return Padding(
-        padding: const EdgeInsets.all(12),
-        child: Wrap(spacing: 10, runSpacing: 10, children: [
-          SizedBox(
-              width: 280,
-              child: TextFormField(
-                  initialValue: q.search,
-                  decoration: const InputDecoration(
-                      labelText: 'Поиск: фамилия или специализация',
-                      border: OutlineInputBorder()),
-                  onChanged: (v) {
-                    timer?.cancel();
-                    timer = Timer(const Duration(milliseconds: 350),
-                        () => go(q.copyWith(search: v)));
-                  })),
-          SizedBox(
-              width: 270,
-              child: DropdownButtonFormField<String?>(
-                  value: q.specialization,
-                  isExpanded: true,
-                  decoration: const InputDecoration(
-                      labelText: 'Специализация', border: OutlineInputBorder()),
-                  items: [
-                    const DropdownMenuItem<String?>(
-                        value: null,
-                        child: Text('Все специализации',
-                            overflow: TextOverflow.ellipsis)),
-                    ...photographerSpecializations.map((v) =>
-                        DropdownMenuItem<String?>(
-                            value: v,
-                            child: Text(v, overflow: TextOverflow.ellipsis)))
-                  ],
-                  onChanged: (v) => go(q.copyWith(specialization: v)))),
-          Row(mainAxisSize: MainAxisSize.min, children: [
-            Switch(
-                value: q.includeDeleted,
-                onChanged: (v) => go(q.copyWith(includeDeleted: v))),
-            const Text('Удалённые')
-          ]),
-          TextButton(
-              onPressed: q.hasActiveFilters
-                  ? () => go(PhotographerQuery(
-                      size: q.size,
-                      sortField: q.sortField,
-                      sortAscending: q.sortAscending))
-                  : null,
-              child: const Text('Сбросить'))
-        ]));
+      padding: const EdgeInsets.all(12),
+      child: Wrap(spacing: 10, runSpacing: 10, children: [
+        SizedBox(
+            width: 280,
+            child: TextFormField(
+                initialValue: query.search,
+                decoration: const InputDecoration(
+                    labelText: 'Поиск: фамилия, имя, специализация',
+                    border: OutlineInputBorder()),
+                onChanged: (value) {
+                  _timer?.cancel();
+                  _timer = Timer(const Duration(milliseconds: 350),
+                      () => _go(query.copyWith(search: value)));
+                })),
+        SizedBox(
+            width: 240,
+            child: DropdownButtonFormField<String?>(
+                value: query.specialization,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                    labelText: 'Специализация', border: OutlineInputBorder()),
+                items: [
+                  const DropdownMenuItem<String?>(
+                      value: null, child: Text('Все специализации')),
+                  for (final value in catalog.specializations)
+                    DropdownMenuItem<String?>(value: value, child: Text(value)),
+                ],
+                onChanged: (value) =>
+                    _go(query.copyWith(specialization: value)))),
+        SizedBox(
+            width: 230,
+            child: DropdownButtonFormField<int?>(
+                value: query.hallId,
+                isExpanded: true,
+                decoration: const InputDecoration(
+                    labelText: 'Работает в зале', border: OutlineInputBorder()),
+                items: [
+                  const DropdownMenuItem<int?>(
+                      value: null, child: Text('Все залы')),
+                  for (final hall in catalog.halls)
+                    DropdownMenuItem<int?>(
+                        value: hall.id, child: Text(hall.name)),
+                ],
+                onChanged: (value) => _go(query.copyWith(hallId: value)))),
+        _numberField('Стаж от', query.experienceFrom,
+            (value) => _go(query.copyWith(experienceFrom: value))),
+        _numberField('Стаж до', query.experienceTo,
+            (value) => _go(query.copyWith(experienceTo: value))),
+        _numberField('Ставка от', query.rateFrom,
+            (value) => _go(query.copyWith(rateFrom: value))),
+        _numberField('Ставка до', query.rateTo,
+            (value) => _go(query.copyWith(rateTo: value))),
+        Row(mainAxisSize: MainAxisSize.min, children: [
+          Switch(
+              value: query.includeDeleted,
+              onChanged: (value) => _go(query.copyWith(includeDeleted: value))),
+          const Text('Удалённые')
+        ]),
+        TextButton(
+            onPressed: query.hasActiveFilters
+                ? () => _go(PhotographerQuery(
+                    size: query.size,
+                    sortField: query.sortField,
+                    sortAscending: query.sortAscending))
+                : null,
+            child: const Text('Сбросить')),
+      ]),
+    );
   }
 
-  Widget selection(PhotographerListNotifier n) => Padding(
-      padding: const EdgeInsets.all(8),
-      child: Wrap(spacing: 8, children: [
-        Text('Выбрано: ${n.selected.length}'),
-        FilledButton(
-            onPressed: () async {
-              if (await confirm(context, 'Удалить выбранных?')) {
-                await n.deleteSelected(false);
-              }
-            },
-            child: const Text('Удалить')),
-        OutlinedButton(
-            onPressed: () async {
-              if (await confirm(context, 'Стереть выбранных?', hard: true)) {
-                await n.deleteSelected(true);
-              }
-            },
-            child: const Text('Стереть навсегда')),
-        TextButton(onPressed: n.clear, child: const Text('Снять выделение'))
-      ]));
-  Widget body(PhotographerListNotifier n) {
-    if (n.status == LoadStatus.idle || n.status == LoadStatus.loading) {
-      return const Center(child: CircularProgressIndicator());
+  Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
+      SizedBox(
+          width: 140,
+          child: TextFormField(
+              initialValue: value?.toString(),
+              keyboardType: TextInputType.number,
+              decoration: InputDecoration(
+                  labelText: label, border: OutlineInputBorder()),
+              onFieldSubmitted: (text) => onChanged(int.tryParse(text))));
+  Widget _selection(PhotographerListNotifier notifier) => Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
+        child: BulkActions(
+          count: notifier.selected.length,
+          onDelete: () async {
+            if (await confirm(context, 'Удалить выбранных фотографов?')) {
+              await notifier.deleteSelected();
+            }
+          },
+          onErase: () async {
+            if (await confirm(context, 'Стереть выбранных фотографов?',
+                hard: true)) {
+              await notifier.eraseSelected();
+            }
+          },
+          onClearSelection: notifier.clearSelection,
+        ),
+      );
+  Widget _body(PhotographerListNotifier notifier, CatalogNotifier catalog) {
+    if (notifier.status != LoadStatus.success) {
+      return ListStateView(notifier: notifier);
     }
-    if (n.status == LoadStatus.error) {
-      return StatusView(text: n.error ?? 'Ошибка', error: true, retry: n.load);
-    }
-    if (n.result.items.isEmpty) {
-      return const StatusView(text: 'Фотографы не найдены.');
+    if (notifier.result.items.isEmpty) {
+      return EmptyView(
+        message: 'Фотографы не найдены',
+        hint: 'Попробуйте другое имя или снимите фильтры.',
+      );
     }
     if (MediaQuery.sizeOf(context).width < compactWidth) {
-      return ListView(children: [for (final p in n.result.items) card(n, p)]);
+      return ListView(children: [
+        for (final item in notifier.result.items) _card(item, catalog)
+      ]);
     }
     return EntityTable<Photographer>(
-        items: n.result.items,
-        id: (p) => p.id,
-        selected: n.selected,
-        toggle: n.toggle,
-        sort: n.query.sortField,
-        asc: n.query.sortAscending,
-        onSort: (f) => go(n.query.copyWith(
-            sortField: f,
-            sortAscending:
-                f == n.query.sortField ? !n.query.sortAscending : true)),
-        columns: [
-          (
-            'Фамилия',
-            'lastName',
-            (p) => Text(p.isDeleted ? '${p.lastName} (удалён)' : p.lastName)
-          ),
-          ('Имя', null, (p) => Text(p.firstName)),
-          ('Специализация', 'specialization', (p) => Text(p.specialization)),
-          ('Стаж', 'experienceYears', (p) => Text('${p.experienceYears} лет')),
-          ('Цена/час', 'hourlyRate', (p) => Text('${p.hourlyRate} ₽'))
-        ],
-        actions: (p) => actions(n, p));
+      items: notifier.result.items,
+      id: (item) => item.id,
+      selected: notifier.selected,
+      toggle: notifier.toggle,
+      sort: notifier.query.sortField,
+      asc: notifier.query.sortAscending,
+      onSort: (field) => _go(notifier.query.copyWith(
+          sortField: field,
+          sortAscending: field == notifier.query.sortField
+              ? !notifier.query.sortAscending
+              : true)),
+      columns: [
+        (
+          'Фамилия',
+          'lastName',
+          (item) => Text('${item.lastName}${item.isDeleted ? ' (удалён)' : ''}')
+        ),
+        ('Имя', 'firstName', (item) => Text(item.firstName)),
+        (
+          'Специализация',
+          'specialization',
+          (item) => Text(item.specialization)
+        ),
+        (
+          'Стаж',
+          'experienceYears',
+          (item) => Text('${item.experienceYears} лет')
+        ),
+        ('Ставка', 'hourlyRate', (item) => Text('${item.hourlyRate} ₽')),
+        (
+          'Залы',
+          null,
+          (item) => Text(item.hallIds.map(catalog.hallName).join(', '))
+        ),
+        ('Броней', null, (item) => Text('${item.bookingIds.length}')),
+      ],
+      actions: (item) => _actions(item),
+    );
   }
 
-  Widget card(PhotographerListNotifier n, Photographer p) => Card(
-      child: ListTile(
+  Widget _card(Photographer item, CatalogNotifier catalog) => Card(
+        child: ListTile(
           leading: Checkbox(
-              value: n.selected.contains(p.id),
-              onChanged: (_) => n.toggle(p.id)),
-          title: Text(p.fullName),
-          subtitle: Text(
-              '${p.specialization}\nСтаж: ${p.experienceYears} лет • ${p.hourlyRate} ₽/час'),
+              value: context
+                  .watch<PhotographerListNotifier>()
+                  .selected
+                  .contains(item.id),
+              onChanged: (_) =>
+                  context.read<PhotographerListNotifier>().toggle(item.id)),
+          title: Text(item.fullName),
+          subtitle: Text('${item.specialization}\n'
+              'Стаж ${item.experienceYears} лет · ${item.hourlyRate} ₽/час\n'
+              'Залы: ${item.hallIds.map(catalog.hallName).join(', ')}'
+              '${item.isDeleted ? ' · удалён' : ''}'),
           isThreeLine: true,
-          trailing: Wrap(children: actions(n, p))));
-  List<Widget> actions(PhotographerListNotifier n, Photographer p) => [
-        if (p.isDeleted)
-          IconButton(
-              onPressed: () => n.restore(p.id), icon: const Icon(Icons.restore))
-        else
-          IconButton(
-              onPressed: () async {
-                if (await confirm(
-                    context, 'Удалить фотографа «${p.fullName}»?')) {
-                  await n.softDelete(p.id);
-                }
-              },
-              icon: const Icon(Icons.delete_outline)),
-        IconButton(
-            onPressed: () async {
-              if (await confirm(context, 'Стереть фотографа «${p.fullName}»?',
-                  hard: true)) {
-                await n.hardDelete(p.id);
-              }
-            },
-            icon: const Icon(Icons.delete_forever))
-      ];
+          trailing: Wrap(children: _actions(item)),
+        ),
+      );
+  List<Widget> _actions(Photographer item) => RecordActions.buttons(
+        permissions: context.watch<SessionStore>().permissions,
+        onEdit: () => context.go('/photographers/${item.id}/edit'),
+        isDeleted: item.isDeleted,
+        onSoftDelete: () => _delete(item, hard: false),
+        onRestore: () =>
+            context.read<PhotographerListNotifier>().restore(item.id),
+        onHardDelete: () => _delete(item, hard: true),
+      );
+  Future<void> _delete(Photographer item, {required bool hard}) async {
+    final bookingRepository = context.read<BookingRepository>();
+    final photographers = context.read<PhotographerListNotifier>();
+    final catalog = context.read<CatalogNotifier>();
+    final linked = await bookingRepository.countForPhotographer(item.id);
+    if (linked > 0) {
+      if (!mounted) return;
+      toast(context,
+          'Нельзя удалить фотографа «${item.fullName}»: связанных бронирований — $linked');
+      return;
+    }
+    if (!mounted) return;
+    if (await confirm(
+        context,
+        hard
+            ? 'Стереть фотографа «${item.fullName}»?'
+            : 'Удалить фотографа «${item.fullName}»?',
+        hard: hard)) {
+      if (hard) {
+        await photographers.hardDelete(item.id);
+      } else {
+        await photographers.softDelete(item.id);
+      }
+      await catalog.load();
+    }
+  }
 }

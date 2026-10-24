@@ -1,32 +1,63 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
+import 'package:provider/provider.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 
-const compactWidth = 600.0;
+import '../state/session.dart';
+
+const compactWidth = 900.0;
 
 class AppScaffold extends StatelessWidget {
   final String title;
   final int index;
   final Widget child;
+  final List<Widget> actions;
+
+  /// Что делает кнопка «Обновить» в шапке.
+  ///
+  /// Нужна именно на вебе: страницу держат открытой часами, а данные за
+  /// это время меняются. Тянуть за список сверху, как на телефоне, в
+  /// браузере никто не станет.
+  final VoidCallback? onRefresh;
+
   const AppScaffold(
       {super.key,
       required this.title,
       required this.index,
-      required this.child});
+      required this.child,
+      this.actions = const [],
+      this.onRefresh});
+
   @override
-  Widget build(BuildContext c) {
-    final compact = MediaQuery.sizeOf(c).width < compactWidth;
+  Widget build(BuildContext context) {
     final destinations = [
+      (Icons.event_available, 'Бронирования', '/bookings'),
       (Icons.meeting_room, 'Залы', '/halls'),
-      (Icons.camera_alt, 'Фотографы', '/photographers')
+      (Icons.camera_alt, 'Фотографы', '/photographers'),
+      (Icons.people, 'Клиенты', '/clients'),
+      (Icons.lightbulb_outline, 'Оборудование', '/equipment'),
     ];
-    final app = AppBar(title: Text(title));
+    final compact = MediaQuery.sizeOf(context).width < compactWidth;
+    final app = AppBar(
+      title: Text(title),
+      actions: [
+        ...actions,
+        if (onRefresh != null)
+          IconButton(
+            tooltip: 'Обновить данные',
+            icon: const Icon(Icons.refresh),
+            onPressed: onRefresh,
+          ),
+        const SessionAction(),
+      ],
+    );
     if (compact) {
       return Scaffold(
           appBar: app,
           body: child,
           bottomNavigationBar: NavigationBar(
               selectedIndex: index,
-              onDestinationSelected: (i) => c.go(destinations[i].$3),
+              onDestinationSelected: (i) => context.go(destinations[i].$3),
               destinations: [
                 for (final d in destinations)
                   NavigationDestination(icon: Icon(d.$1), label: d.$2)
@@ -37,8 +68,8 @@ class AppScaffold extends StatelessWidget {
         body: Row(children: [
           NavigationRail(
               selectedIndex: index,
-              extended: MediaQuery.sizeOf(c).width >= 1200,
-              onDestinationSelected: (i) => c.go(destinations[i].$3),
+              extended: MediaQuery.sizeOf(context).width >= 1200,
+              onDestinationSelected: (i) => context.go(destinations[i].$3),
               destinations: [
                 for (final d in destinations)
                   NavigationRailDestination(icon: Icon(d.$1), label: Text(d.$2))
@@ -49,25 +80,83 @@ class AppScaffold extends StatelessWidget {
   }
 }
 
-class StatusView extends StatelessWidget {
-  final String text;
-  final bool error;
-  final VoidCallback? retry;
-  const StatusView(
-      {super.key, required this.text, this.error = false, this.retry});
+/// Кнопка текущего пользователя и выход из системы.
+///
+/// Показывает, под кем выполнен вход, и позволяет завершить сессию.
+class SessionAction extends StatelessWidget {
+  const SessionAction({super.key});
+
   @override
-  Widget build(BuildContext c) => Center(
-          child: Column(mainAxisSize: MainAxisSize.min, children: [
-        Icon(error ? Icons.error_outline : Icons.search_off,
-            size: 48, color: error ? Theme.of(c).colorScheme.error : null),
-        const SizedBox(height: 12),
-        Text(text, textAlign: TextAlign.center),
-        if (retry != null)
-          Padding(
-              padding: const EdgeInsets.only(top: 12),
-              child: FilledButton(
-                  onPressed: retry, child: const Text('Повторить')))
-      ]));
+  Widget build(BuildContext context) {
+    final session = context.watch<SessionStore>();
+    final user = session.user;
+    if (user == null) {
+      return IconButton(
+        tooltip: 'Войти',
+        onPressed: () => context.go('/login'),
+        icon: const Icon(Icons.login),
+      );
+    }
+    return PopupMenuButton<String>(
+      tooltip: user.fullName,
+      icon: CircleAvatar(
+        radius: 14,
+        child: Text(
+          user.fullName.isEmpty ? '?' : user.fullName[0].toUpperCase(),
+          style: const TextStyle(fontSize: 13),
+        ),
+      ),
+      onSelected: (value) async {
+        if (value != 'logout') return;
+        // Всё, что нужно от контекста, берём до первого `await`:
+        // после ожидания контекст мог быть размонтирован.
+        final auth = context.read<AuthRepository>();
+        final navigator = GoRouter.of(context);
+        final prefs = await SharedPreferences.getInstance();
+        // Сессия закрывается на сервере, затем удаляется из
+        // локального хранилища.
+        try {
+          await auth.logout(session.refreshToken);
+        } catch (_) {
+          // Сервер может быть недоступен: локальную сессию
+          // завершаем в любом случае.
+        }
+        await session.logout();
+        await prefs.remove('focus_frame_api_token');
+        await prefs.remove('focus_frame_api_refresh');
+        navigator.go('/login');
+      },
+      itemBuilder: (context) => [
+        PopupMenuItem<String>(
+          enabled: false,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Text(user.fullName,
+                  style: const TextStyle(fontWeight: FontWeight.w600)),
+              Text(user.role, style: Theme.of(context).textTheme.bodySmall),
+            ],
+          ),
+        ),
+        const PopupMenuDivider(),
+        const PopupMenuItem<String>(
+          value: 'logout',
+          child: Text('Выйти'),
+        ),
+      ],
+    );
+  }
+}
+
+class SectionTitle extends StatelessWidget {
+  final String text;
+  const SectionTitle(this.text, {super.key});
+  @override
+  Widget build(BuildContext context) => Padding(
+        padding: const EdgeInsets.only(bottom: 12),
+        child: Text(text, style: Theme.of(context).textTheme.titleMedium),
+      );
 }
 
 class Pager extends StatelessWidget {
@@ -82,7 +171,7 @@ class Pager extends StatelessWidget {
       required this.onPage,
       required this.onSize});
   @override
-  Widget build(BuildContext c) => Padding(
+  Widget build(BuildContext context) => Padding(
       padding: const EdgeInsets.all(12),
       child: Wrap(
           spacing: 8,
@@ -113,12 +202,13 @@ class Pager extends StatelessWidget {
           ]));
 }
 
-Future<bool> confirm(BuildContext c, String text, {bool hard = false}) async =>
+Future<bool> confirm(BuildContext context, String text,
+        {bool hard = false, String? title}) async =>
     (await showDialog<bool>(
-        context: c,
+        context: context,
         builder: (x) => AlertDialog(
-                title:
-                    Text(hard ? 'Физическое удаление' : 'Логическое удаление'),
+                title: Text(title ??
+                    (hard ? 'Физическое удаление' : 'Логическое удаление')),
                 content: Text(text),
                 actions: [
                   TextButton(
@@ -129,3 +219,11 @@ Future<bool> confirm(BuildContext c, String text, {bool hard = false}) async =>
                       child: Text(hard ? 'Стереть' : 'Удалить'))
                 ]))) ??
     false;
+void toast(BuildContext context, String message) {
+  ScaffoldMessenger.of(context)
+    ..hideCurrentSnackBar()
+    ..showSnackBar(SnackBar(
+      content: Text(message),
+      behavior: SnackBarBehavior.floating,
+    ));
+}

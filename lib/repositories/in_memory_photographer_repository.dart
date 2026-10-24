@@ -1,102 +1,187 @@
+import 'package:dio/dio.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import '../core/errors.dart';
 import '../data/seed_data.dart';
 import '../models/page_result.dart';
 import '../models/photographer.dart';
 import '../models/photographer_query.dart';
+import 'in_memory_repository.dart';
 import 'photographer_repository.dart';
 
-class InMemoryPhotographerRepository implements PhotographerRepository {
-  InMemoryPhotographerRepository() : _items = [...seedPhotographers];
-  final List<Photographer> _items;
+class InMemoryPhotographerRepository extends InMemoryRepository<Photographer>
+    implements PhotographerRepository {
+  InMemoryPhotographerRepository(SharedPreferences prefs)
+      : super(
+          prefs: prefs,
+          name: 'photographers',
+          parse: Photographer.fromJson,
+          encode: (item) => item.toJson(),
+          seed: seedPhotographers.map((item) => item.toJson()).toList(),
+        );
   @override
-  Future<PageResult<Photographer>> find(PhotographerQuery q) async {
-    await Future<void>.delayed(const Duration(milliseconds: 250));
-    if (q.experienceFrom != null &&
-        q.experienceTo != null &&
-        q.experienceFrom! > q.experienceTo!) {
+  int rowId(Photographer item) => item.id;
+  @override
+  bool rowDeleted(Photographer item) => item.isDeleted;
+  @override
+  Map<String, dynamic> rowJson(Photographer item) => item.toJson();
+  @override
+  Photographer rowWithDeletedAt(Photographer item, DateTime? deletedAt) =>
+      deletedAt == null
+          ? item.copyWith(clearDeletedAt: true)
+          : item.copyWith(deletedAt: deletedAt);
+  @override
+  Future<PageResult<Photographer>> find(
+    PhotographerQuery query, {
+    CancelToken? cancelToken,
+  }) async {
+    if (query.experienceFrom != null &&
+        query.experienceTo != null &&
+        query.experienceFrom! > query.experienceTo!) {
       throw ArgumentError('Стаж «от» больше стажа «до»');
     }
-    var rows = _items.where((x) => q.includeDeleted || !x.isDeleted).toList();
-    final n = q.search.trim().toLowerCase();
-    if (n.isNotEmpty) {
-      rows = rows
-          .where((x) =>
-              x.lastName.toLowerCase().contains(n) ||
-              x.firstName.toLowerCase().contains(n) ||
-              x.specialization.toLowerCase().contains(n))
-          .toList();
+    if (query.rateFrom != null &&
+        query.rateTo != null &&
+        query.rateFrom! > query.rateTo!) {
+      throw ArgumentError('Ставка «от» больше ставки «до»');
     }
-    if (q.specialization != null) {
-      rows = rows.where((x) => x.specialization == q.specialization).toList();
-    }
-    if (q.experienceFrom != null) {
-      rows = rows.where((x) => x.experienceYears >= q.experienceFrom!).toList();
-    }
-    if (q.experienceTo != null) {
-      rows = rows.where((x) => x.experienceYears <= q.experienceTo!).toList();
-    }
-    rows.sort((a, b) {
-      final r = switch (q.sortField) {
-        'specialization' => a.specialization.compareTo(b.specialization),
-        'experienceYears' => a.experienceYears.compareTo(b.experienceYears),
-        'hourlyRate' => a.hourlyRate.compareTo(b.hourlyRate),
-        _ => a.lastName.compareTo(b.lastName)
-      };
-      return q.sortAscending ? r : -r;
-    });
-    final total = rows.length,
-        from = (q.page - 1) * q.size,
-        to = (from + q.size) > total ? total : from + q.size;
-    return PageResult(
-        items: from >= total ? <Photographer>[] : rows.sublist(from, to),
-        page: q.page,
-        size: q.size,
-        total: total);
+    return page(
+      pageNumber: query.page,
+      pageSize: query.size,
+      filter: (rows) {
+        var result =
+            rows.where((x) => query.includeDeleted || !x.isDeleted).toList();
+        final search = query.search.trim().toLowerCase();
+        if (search.isNotEmpty) {
+          result = result
+              .where((x) =>
+                  x.lastName.toLowerCase().contains(search) ||
+                  x.firstName.toLowerCase().contains(search) ||
+                  x.specialization.toLowerCase().contains(search) ||
+                  x.bio.toLowerCase().contains(search))
+              .toList();
+        }
+        if (query.specialization != null) {
+          result = result
+              .where((x) => x.specialization == query.specialization)
+              .toList();
+        }
+        if (query.hallId != null) {
+          result =
+              result.where((x) => x.hallIds.contains(query.hallId)).toList();
+        }
+        if (query.experienceFrom != null) {
+          result = result
+              .where((x) => x.experienceYears >= query.experienceFrom!)
+              .toList();
+        }
+        if (query.experienceTo != null) {
+          result = result
+              .where((x) => x.experienceYears <= query.experienceTo!)
+              .toList();
+        }
+        if (query.rateFrom != null) {
+          result =
+              result.where((x) => x.hourlyRate >= query.rateFrom!).toList();
+        }
+        if (query.rateTo != null) {
+          result = result.where((x) => x.hourlyRate <= query.rateTo!).toList();
+        }
+        result.sort((a, b) {
+          final compared = switch (query.sortField) {
+            'specialization' => a.specialization.compareTo(b.specialization),
+            'experienceYears' => a.experienceYears.compareTo(b.experienceYears),
+            'hourlyRate' => a.hourlyRate.compareTo(b.hourlyRate),
+            _ => a.lastName.compareTo(b.lastName),
+          };
+          return query.sortAscending ? compared : -compared;
+        });
+        return result;
+      },
+    );
   }
 
   @override
-  Future<Photographer?> findById(int id) async {
-    for (final x in _items) {
-      if (x.id == id) return x;
+  Future<Photographer> save(Photographer photographer) async {
+    final duplicate = items.any((x) =>
+        x.id != photographer.id &&
+        !x.isDeleted &&
+        x.firstName.trim().toLowerCase() ==
+            photographer.firstName.trim().toLowerCase() &&
+        x.lastName.trim().toLowerCase() ==
+            photographer.lastName.trim().toLowerCase());
+    if (duplicate) {
+      throw const FieldValidationException(
+          'lastName', 'Фотограф с таким именем уже есть');
     }
-    return null;
+    final saved = photographer.id == 0
+        ? Photographer(
+            id: nextId(),
+            firstName: photographer.firstName.trim(),
+            lastName: photographer.lastName.trim(),
+            specialization: photographer.specialization,
+            bio: photographer.bio.trim(),
+            experienceYears: photographer.experienceYears,
+            hourlyRate: photographer.hourlyRate,
+            hallIds: photographer.hallIds,
+            bookingIds: photographer.bookingIds)
+        : photographer.copyWith(
+            firstName: photographer.firstName.trim(),
+            lastName: photographer.lastName.trim(),
+            bio: photographer.bio.trim(),
+          );
+    put(saved);
+    await persist();
+    return saved;
+  }
+
+  Future<Photographer> saveUnchecked(Photographer photographer) async {
+    put(photographer);
+    await persist();
+    return photographer;
   }
 
   @override
   Future<void> softDelete(int id) async {
-    final i = _items.indexWhere((x) => x.id == id);
-    if (i < 0) throw StateError('Фотограф не найден');
-    _items[i] = _items[i].copyWith(deletedAt: DateTime.now());
+    markDeleted(id);
+    await persist();
   }
 
   @override
   Future<void> hardDelete(int id) async {
-    _items.removeWhere((x) => x.id == id);
+    remove(id);
+    await persist();
   }
 
   @override
   Future<void> restore(int id) async {
-    final i = _items.indexWhere((x) => x.id == id);
-    if (i < 0) throw StateError('Фотограф не найден');
-    _items[i] = _items[i].copyWith(clearDeletedAt: true);
+    markRestored(id);
+    await persist();
   }
 
   @override
   Future<int> softDeleteMany(List<int> ids) async {
-    var c = 0;
+    var count = 0;
     for (final id in ids) {
-      final i = _items.indexWhere((x) => x.id == id && !x.isDeleted);
-      if (i >= 0) {
-        _items[i] = _items[i].copyWith(deletedAt: DateTime.now());
-        c++;
-      }
+      final exists = items.any((x) => x.id == id && !x.isDeleted);
+      if (!exists) continue;
+      markDeleted(id);
+      count++;
     }
-    return c;
+    await persist();
+    return count;
   }
 
   @override
   Future<int> hardDeleteMany(List<int> ids) async {
-    final before = _items.length;
-    _items.removeWhere((x) => ids.contains(x.id));
-    return before - _items.length;
+    final before = items.length;
+    for (final id in ids) {
+      remove(id);
+    }
+    await persist();
+    return before - items.length;
   }
+
+  @override
+  Future<int> countBookings(int id) async =>
+      items.where((item) => item.bookingIds.contains(id)).length;
 }

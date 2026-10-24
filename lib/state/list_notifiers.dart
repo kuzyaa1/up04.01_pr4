@@ -1,168 +1,115 @@
-import 'package:flutter/foundation.dart';
+import 'package:dio/dio.dart';
+
 import '../models/hall_query.dart';
 import '../models/page_result.dart';
-import '../models/photographer.dart';
 import '../models/photographer_query.dart';
 import '../models/studio_hall.dart';
+import '../models/photographer.dart';
 import '../repositories/hall_repository.dart';
 import '../repositories/photographer_repository.dart';
+import 'list_notifier.dart';
 
-enum LoadStatus { idle, loading, success, error }
-
-class HallListNotifier extends ChangeNotifier {
+/// Состояние списка залов студии.
+///
+/// Данные приходят с сервера: поиск, фильтры, сортировка и номер
+/// страницы уходят в запрос, клиент держит только текущую страницу.
+class HallListNotifier extends ListNotifier<StudioHall> {
   HallListNotifier(this._repo);
   final HallRepository _repo;
   HallQuery _query = const HallQuery();
-  PageResult<StudioHall> _result = PageResult.empty();
-  LoadStatus _status = LoadStatus.idle;
-  String? _error;
-  final Set<int> _selected = {};
   HallQuery get query => _query;
-  PageResult<StudioHall> get result => _result;
-  LoadStatus get status => _status;
-  String? get error => _error;
-  Set<int> get selected => Set.unmodifiable(_selected);
-  bool get hasSelection => _selected.isNotEmpty;
-  Future<void> applyQuery(HallQuery q) async {
-    _query = q;
-    _selected.clear();
+
+  @override
+  Future<PageResult<StudioHall>> fetch(CancelToken cancelToken) =>
+      _repo.find(_query, cancelToken: cancelToken);
+
+  @override
+  Future<void> applyQuery(Object query) async {
+    _query = query as HallQuery;
+    clearSelection();
     await load();
   }
 
-  Future<void> load() async {
-    _status = LoadStatus.loading;
-    _error = null;
-    notifyListeners();
-    try {
-      _result = await _repo.find(_query);
-      _status = LoadStatus.success;
-    } catch (e) {
-      _error = 'Не удалось загрузить залы: $e';
-      _status = LoadStatus.error;
-    }
-    notifyListeners();
-  }
-
-  void toggle(int id) {
-    if (!_selected.remove(id)) _selected.add(id);
-    notifyListeners();
-  }
-
-  void selectAll(Iterable<int> ids) {
-    _selected
-      ..clear()
-      ..addAll(ids);
-    notifyListeners();
-  }
-
-  void clear() {
-    _selected.clear();
-    notifyListeners();
-  }
-
+  @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
-    _selected.remove(id);
     await load();
   }
 
+  @override
+  Future<void> hardDelete(int id) async {
+    await _repo.hardDelete(id);
+    await load();
+  }
+
+  @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
     await load();
   }
 
-  Future<void> hardDelete(int id) async {
-    await _repo.hardDelete(id);
-    _selected.remove(id);
+  @override
+  Future<void> deleteSelected() async {
+    await _repo.softDeleteMany(selectedIds);
+    clearSelection();
     await load();
   }
 
-  Future<void> deleteSelected(bool hard) async {
-    if (hard) {
-      await _repo.hardDeleteMany(_selected.toList());
-    } else {
-      await _repo.softDeleteMany(_selected.toList());
-    }
-    _selected.clear();
+  @override
+  Future<void> eraseSelected() async {
+    await _repo.hardDeleteMany(selectedIds);
+    clearSelection();
     await load();
   }
 }
 
-class PhotographerListNotifier extends ChangeNotifier {
+/// Состояние списка фотографов.
+class PhotographerListNotifier extends ListNotifier<Photographer> {
   PhotographerListNotifier(this._repo);
   final PhotographerRepository _repo;
   PhotographerQuery _query = const PhotographerQuery();
-  PageResult<Photographer> _result = PageResult.empty();
-  LoadStatus _status = LoadStatus.idle;
-  String? _error;
-  final Set<int> _selected = {};
   PhotographerQuery get query => _query;
-  PageResult<Photographer> get result => _result;
-  LoadStatus get status => _status;
-  String? get error => _error;
-  Set<int> get selected => Set.unmodifiable(_selected);
-  bool get hasSelection => _selected.isNotEmpty;
-  Future<void> applyQuery(PhotographerQuery q) async {
-    _query = q;
-    _selected.clear();
+
+  @override
+  Future<PageResult<Photographer>> fetch(CancelToken cancelToken) =>
+      _repo.find(_query, cancelToken: cancelToken);
+
+  @override
+  Future<void> applyQuery(Object query) async {
+    _query = query as PhotographerQuery;
+    clearSelection();
     await load();
   }
 
-  Future<void> load() async {
-    _status = LoadStatus.loading;
-    _error = null;
-    notifyListeners();
-    try {
-      _result = await _repo.find(_query);
-      _status = LoadStatus.success;
-    } catch (e) {
-      _error = 'Не удалось загрузить фотографов: $e';
-      _status = LoadStatus.error;
-    }
-    notifyListeners();
-  }
-
-  void toggle(int id) {
-    if (!_selected.remove(id)) _selected.add(id);
-    notifyListeners();
-  }
-
-  void selectAll(Iterable<int> ids) {
-    _selected
-      ..clear()
-      ..addAll(ids);
-    notifyListeners();
-  }
-
-  void clear() {
-    _selected.clear();
-    notifyListeners();
-  }
-
+  @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
-    _selected.remove(id);
     await load();
   }
 
+  @override
+  Future<void> hardDelete(int id) async {
+    await _repo.hardDelete(id);
+    await load();
+  }
+
+  @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
     await load();
   }
 
-  Future<void> hardDelete(int id) async {
-    await _repo.hardDelete(id);
-    _selected.remove(id);
+  @override
+  Future<void> deleteSelected() async {
+    await _repo.softDeleteMany(selectedIds);
+    clearSelection();
     await load();
   }
 
-  Future<void> deleteSelected(bool hard) async {
-    if (hard) {
-      await _repo.hardDeleteMany(_selected.toList());
-    } else {
-      await _repo.softDeleteMany(_selected.toList());
-    }
-    _selected.clear();
+  @override
+  Future<void> eraseSelected() async {
+    await _repo.hardDeleteMany(selectedIds);
+    clearSelection();
     await load();
   }
 }
