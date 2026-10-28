@@ -64,7 +64,7 @@ void main() {
       final session = SessionStore();
       expect(session.isAuthenticated, isFalse);
       expect(session.permissions.isGuest, isTrue);
-      expect(session.permissions.canRead, isTrue);
+      expect(session.permissions.canRead, isFalse);
       expect(session.permissions.canCreate, isFalse);
     });
 

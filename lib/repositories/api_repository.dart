@@ -1,6 +1,7 @@
 import 'package:dio/dio.dart';
 
 import '../core/api_client.dart';
+import '../core/config.dart';
 import '../core/api_exceptions.dart';
 import '../models/page_result.dart';
 
@@ -74,7 +75,11 @@ abstract class ApiRepository<T, Q> {
       () => guard(
         () => dio.get<Map<String, dynamic>>(
           collectionPath,
-          queryParameters: _clean(parameters),
+          queryParameters: {
+            ..._clean(parameters),
+            if (apiDemoDelayMs > 0) '__delay': apiDemoDelayMs,
+            if (apiDemoFail > 0) '__fail': apiDemoFail,
+          },
           cancelToken: cancelToken,
         ),
       ),
@@ -153,15 +158,15 @@ abstract class ApiRepository<T, Q> {
 
   /// Удаляет физически несколько записей.
   ///
-  /// Учебный сервер удаляет записи по одному, поэтому и здесь запрос
-  /// уходит на каждую запись отдельно.
+  /// Сервер сначала проверяет зависимости всего набора, затем удаляет
+  /// записи одним запросом.
   Future<int> hardDeleteMany(List<int> ids) async {
-    var deleted = 0;
-    for (final id in ids) {
-      await hardDelete(id);
-      deleted++;
-    }
-    return deleted;
+    final response = await guard(() => dio.post<Map<String, dynamic>>(
+          '$collectionPath/bulk-delete',
+          queryParameters: {'hard': true},
+          data: {'ids': ids},
+        ));
+    return _asInt(response.data?['deleted']) ?? 0;
   }
 
   /// Читает все записи без постраничного вывода.
@@ -171,10 +176,20 @@ abstract class ApiRepository<T, Q> {
   ///
   /// Условия отбора для этого запроса задаёт [allQuery].
   Future<List<T>> all({bool includeDeleted = false}) async {
-    final result = await find(
-      allQuery(includeDeleted: includeDeleted),
-    );
-    return result.items;
+    final parameters = toParameters(allQuery(includeDeleted: includeDeleted));
+    final items = <T>[];
+    var page = 1;
+    while (true) {
+      final response =
+          await withRetry(() => guard(() => dio.get<Map<String, dynamic>>(
+                collectionPath,
+                queryParameters: {..._clean(parameters), 'page': page},
+              )));
+      final result = parsePage(response.data ?? {}, fallbackSize: 100);
+      items.addAll(result.items);
+      if (items.length >= result.total || result.items.isEmpty) return items;
+      page++;
+    }
   }
 
   /// Условия отбора для запроса «прочитать всё».

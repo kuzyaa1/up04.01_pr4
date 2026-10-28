@@ -43,3 +43,8 @@ app.*.map.json
 /android/app/debug
 /android/app/profile
 /android/app/release
+
+# Local coursework server records and session tokens
+/server/.local-state.json*
+/.audit_pr4/
+/.audit_pr5/

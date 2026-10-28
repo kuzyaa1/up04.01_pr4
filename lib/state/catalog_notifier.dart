@@ -29,12 +29,14 @@ class CatalogNotifier extends ChangeNotifier {
     required ClientRepository clients,
     required BookingRepository bookings,
     required EquipmentRepository equipment,
+    this.includeClients = true,
   })  : _halls = halls,
         _photographers = photographers,
         _clients = clients,
         _bookings = bookings,
         _equipment = equipment;
 
+  final bool includeClients;
   final HallRepository _halls;
   final PhotographerRepository _photographers;
   final ClientRepository _clients;
@@ -46,10 +48,22 @@ class CatalogNotifier extends ChangeNotifier {
   List<Client> _clientOptions = [];
   List<Equipment> _equipmentOptions = [];
   List<String> _shootingTypes = [];
+  bool _disposed = false;
+  void _safeNotify() {
+    if (!_disposed) notifyListeners();
+  }
+
+  @override
+  void dispose() {
+    _disposed = true;
+    super.dispose();
+  }
+
   bool _loaded = false;
   bool _loading = false;
   String? _error;
   DateTime? _loadedAt;
+  Future<void>? _pending;
 
   List<StudioHall> get halls => List.unmodifiable(_hallOptions);
   List<Photographer> get photographers =>
@@ -70,7 +84,27 @@ class CatalogNotifier extends ChangeNotifier {
   /// справочник считается актуальным.
   Future<void> load(
       {bool force = false,
+      Duration refetchAfter = const Duration(minutes: 5)}) {
+    return _pending ??= _load(force: force, refetchAfter: refetchAfter)
+        .whenComplete(() => _pending = null);
+  }
+
+  Future<PageResult<T>> _allPages<T, Q>(Q query, Q Function(int page) next,
+      Future<PageResult<T>> Function(Q) fetch) async {
+    var result = await fetch(query);
+    final items = <T>[...result.items];
+    while (items.length < result.total && result.items.isNotEmpty) {
+      result = await fetch(next(result.page + 1));
+      items.addAll(result.items);
+    }
+    return PageResult(
+        items: items, page: 1, size: items.length, total: result.total);
+  }
+
+  Future<void> _load(
+      {bool force = false,
       Duration refetchAfter = const Duration(minutes: 5)}) async {
+    await Future<void>.value();
     final loadedAt = _loadedAt;
     if (!force &&
         loadedAt != null &&
@@ -80,17 +114,29 @@ class CatalogNotifier extends ChangeNotifier {
     if (_loading) return;
     _loading = true;
     _error = null;
-    notifyListeners();
+    _safeNotify();
     try {
       // Запросы не зависят друг от друга, поэтому уходят разом, а не по
       // очереди. На справочниках в памяти разницы не видно, а вот на
       // сервере последовательные запросы сложатся в заметную задержку.
       final results = await Future.wait<PageResult<dynamic>>([
-        _halls.find(const HallQuery(size: 100)),
-        _photographers.find(const PhotographerQuery(size: 100)),
-        _clients.find(const ClientQuery(size: 100)),
-        _equipment.find(const EquipmentQuery(size: 100)),
-        _bookings.find(const BookingQuery(size: 100)),
+        _allPages<StudioHall, HallQuery>(const HallQuery(size: 100),
+            (p) => HallQuery(size: 100, page: p), (q) => _halls.find(q)),
+        _allPages<Photographer, PhotographerQuery>(
+            const PhotographerQuery(size: 100),
+            (p) => PhotographerQuery(size: 100, page: p),
+            (q) => _photographers.find(q)),
+        if (includeClients)
+          _allPages<Client, ClientQuery>(const ClientQuery(size: 100),
+              (p) => ClientQuery(size: 100, page: p), (q) => _clients.find(q))
+        else
+          Future.value(PageResult<Client>.empty()),
+        _allPages<Equipment, EquipmentQuery>(
+            const EquipmentQuery(size: 100),
+            (p) => EquipmentQuery(size: 100, page: p),
+            (q) => _equipment.find(q)),
+        _allPages<Booking, BookingQuery>(const BookingQuery(size: 100),
+            (p) => BookingQuery(size: 100, page: p), (q) => _bookings.find(q)),
       ]);
 
       _hallOptions = (results[0] as PageResult<StudioHall>).items;
@@ -119,7 +165,7 @@ class CatalogNotifier extends ChangeNotifier {
       _error = ListNotifier.describeError(error);
     } finally {
       _loading = false;
-      notifyListeners();
+      _safeNotify();
     }
   }
 

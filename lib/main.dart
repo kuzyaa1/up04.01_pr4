@@ -22,6 +22,8 @@ import 'state/catalog_notifier.dart';
 import 'state/catalog_notifiers.dart';
 import 'state/list_notifiers.dart';
 import 'state/session.dart';
+import 'widgets/session_watcher.dart';
+import 'repositories/role_repository.dart';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -35,14 +37,20 @@ Future<void> main() async {
 
   // Токен доступа берётся у сессии в момент запроса, поэтому вход
   // и выход работают без пересборки клиента.
-  final dio = buildDio(tokenProvider: () => session.token);
+  final dio = buildDio(
+      tokenProvider: () => session.token,
+      refreshTokens: session.refreshTokens,
+      onSessionExpired: () => session.logout(
+          reason: 'Сессия истекла. Войдите снова.', revoke: false));
   final auth = AuthRepository(dio);
+  session.attach(auth);
 
   // Профиль пользователя восстанавливается по сохранённому токену.
   // Без этого после перезагрузки страницы роль была бы потеряна
   // и приложение работало бы как гость.
   await session.restoreUser(auth);
 
+  final router = createRouter(session);
   runApp(MultiProvider(
     providers: [
       Provider<Dio>(create: (_) => dio),
@@ -50,6 +58,7 @@ Future<void> main() async {
       // и выходе. Обычный Provider на Listenable жаловался бы в консоль.
       ChangeNotifierProvider<SessionStore>.value(value: session),
       Provider<AuthRepository>(create: (_) => auth),
+      Provider<RoleRepository>(create: (_) => RoleRepository(dio)),
 
       // Реализации репозиториев заменены на сетевые.
       // Интерфейсы остались прежними, поэтому экраны не изменились.
@@ -59,32 +68,55 @@ Future<void> main() async {
       Provider<BookingRepository>(create: (_) => ApiBookingRepository(dio)),
       Provider<ClientRepository>(create: (_) => ApiClientRepository(dio)),
       Provider<EquipmentRepository>(create: (_) => ApiEquipmentRepository(dio)),
-
-      ChangeNotifierProvider(
-          create: (c) => HallListNotifier(c.read<HallRepository>())),
-      ChangeNotifierProvider(
-          create: (c) =>
-              PhotographerListNotifier(c.read<PhotographerRepository>())),
-      ChangeNotifierProvider(
-          create: (c) => BookingListNotifier(c.read<BookingRepository>())),
-      ChangeNotifierProvider(
-          create: (c) => ClientListNotifier(c.read<ClientRepository>())),
-      ChangeNotifierProvider(
-          create: (c) => EquipmentListNotifier(c.read<EquipmentRepository>())),
-      ChangeNotifierProvider(
-        create: (c) => CatalogNotifier(
-          halls: c.read<HallRepository>(),
-          photographers: c.read<PhotographerRepository>(),
-          clients: c.read<ClientRepository>(),
-          bookings: c.read<BookingRepository>(),
-          equipment: c.read<EquipmentRepository>(),
-        )..load(),
-      ),
     ],
-    child:
-        PhotoStudioApp(notice: migrationNotice, router: createRouter(session)),
+    child: Consumer<SessionStore>(
+        builder: (context, session, _) => MultiProvider(
+              key: ValueKey('${session.isAuthenticated}:${session.user?.id}'),
+              providers: [
+                ChangeNotifierProvider(
+                    create: (c) => HallListNotifier(c.read<HallRepository>())
+                      ..onMutation =
+                          () => c.read<CatalogNotifier>().load(force: true)),
+                ChangeNotifierProvider(
+                    create: (c) => PhotographerListNotifier(
+                        c.read<PhotographerRepository>())
+                      ..onMutation =
+                          () => c.read<CatalogNotifier>().load(force: true)),
+                ChangeNotifierProvider(
+                    create: (c) =>
+                        BookingListNotifier(c.read<BookingRepository>())
+                          ..onMutation = () =>
+                              c.read<CatalogNotifier>().load(force: true)),
+                ChangeNotifierProvider(
+                    create: (c) =>
+                        ClientListNotifier(c.read<ClientRepository>())
+                          ..onMutation = () =>
+                              c.read<CatalogNotifier>().load(force: true)),
+                ChangeNotifierProvider(
+                    create: (c) =>
+                        EquipmentListNotifier(c.read<EquipmentRepository>())
+                          ..onMutation = () =>
+                              c.read<CatalogNotifier>().load(force: true)),
+                ChangeNotifierProvider(
+                  create: (c) => CatalogNotifier(
+                    halls: c.read<HallRepository>(),
+                    photographers: c.read<PhotographerRepository>(),
+                    clients: c.read<ClientRepository>(),
+                    bookings: c.read<BookingRepository>(),
+                    equipment: c.read<EquipmentRepository>(),
+                    includeClients: session.permissions.canManageClients,
+                  )..load(),
+                ),
+              ],
+              child: SessionWatcher(
+                  session: session,
+                  child:
+                      PhotoStudioApp(notice: migrationNotice, router: router)),
+            )),
   ));
 }
+
+final _messengerKey = GlobalKey<ScaffoldMessengerState>();
 
 class PhotoStudioApp extends StatelessWidget {
   final String? notice;
@@ -95,6 +127,7 @@ class PhotoStudioApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) => MaterialApp.router(
         title: 'FocusFrames',
+        scaffoldMessengerKey: _messengerKey,
         debugShowCheckedModeBanner: false,
         theme: ThemeData(
           colorScheme: ColorScheme.fromSeed(seedColor: Colors.deepPurple),
@@ -102,8 +135,11 @@ class PhotoStudioApp extends StatelessWidget {
         ),
         routerConfig: router,
         builder: (context, child) {
-          if (notice == null) return child ?? const SizedBox.shrink();
-          return MigrationNoticeHost(message: notice!, child: child!);
+          if (notice == null) {
+            return SessionWarning(child: child ?? const SizedBox.shrink());
+          }
+          return SessionWarning(
+              child: MigrationNoticeHost(message: notice!, child: child!));
         },
       );
 }
@@ -124,7 +160,7 @@ class _MigrationNoticeHostState extends State<MigrationNoticeHost> {
     super.initState();
     WidgetsBinding.instance.addPostFrameCallback((_) {
       if (!mounted) return;
-      final messenger = ScaffoldMessenger.maybeOf(context);
+      final messenger = _messengerKey.currentState;
       messenger?.showSnackBar(SnackBar(
         content: Row(children: [
           const Icon(Icons.storage, color: Colors.white),

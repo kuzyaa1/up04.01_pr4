@@ -30,7 +30,7 @@ class ApiPhotographerRepository
       bio: parseString(json['city']),
       experienceYears: parseInt(json['experienceYears']),
       hourlyRate: parseInt(json['hourlyRate']),
-      hallIds: parseIntList(json['bookingIds']),
+      hallIds: parseIntList(json['hallIds']),
       bookingIds: parseIntList(json['bookingIds']),
       deletedAt: parseDate(json['deletedAt']),
     );
@@ -41,6 +41,7 @@ class ApiPhotographerRepository
         'fullName': photographer.fullName.trim(),
         'specialization': photographer.specialization.trim(),
         'city': photographer.bio.trim(),
+        'hallIds': photographer.hallIds,
         'experienceYears': photographer.experienceYears,
         'hourlyRate': photographer.hourlyRate,
       };
@@ -48,6 +49,7 @@ class ApiPhotographerRepository
   @override
   Map<String, dynamic> toParameters(PhotographerQuery query) => {
         if (query.search.trim().isNotEmpty) 'search': query.search.trim(),
+        if (query.hallId != null) 'hallId': query.hallId,
         if (query.specialization != null && query.specialization!.isNotEmpty)
           'specialization': query.specialization,
         if (query.experienceFrom != null)

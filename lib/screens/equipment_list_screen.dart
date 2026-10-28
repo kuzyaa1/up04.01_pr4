@@ -76,6 +76,7 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
           child: Align(
             alignment: Alignment.centerRight,
             child: CreateButton(
+                collection: 'equipment',
                 label: 'Новое оборудование',
                 onPressed: () => context.go('/equipment/new')),
           ),
@@ -103,8 +104,8 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
       child: Wrap(spacing: 10, runSpacing: 10, children: [
         SizedBox(
             width: 260,
-            child: TextFormField(
-                initialValue: query.search,
+            child: QueryTextField(
+                value: query.search,
                 decoration: const InputDecoration(
                     labelText: 'Поиск: название, категория, производитель',
                     border: OutlineInputBorder()),
@@ -116,7 +117,9 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
         SizedBox(
             width: 200,
             child: DropdownButtonFormField<String?>(
-                value: query.category,
+                value: _categories.contains(query.category)
+                    ? query.category
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Категория', border: OutlineInputBorder()),
@@ -130,7 +133,9 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
         SizedBox(
             width: 220,
             child: DropdownButtonFormField<int?>(
-                value: query.hallId,
+                value: catalog.halls.any((h) => h.id == query.hallId)
+                    ? query.hallId
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Зал', border: OutlineInputBorder()),
@@ -171,8 +176,8 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
   Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
       SizedBox(
           width: 140,
-          child: TextFormField(
-              initialValue: value?.toString(),
+          child: QueryTextField(
+              value: value?.toString(),
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                   labelText: label, border: OutlineInputBorder()),
@@ -180,6 +185,7 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
   Widget _selection(EquipmentListNotifier notifier) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: BulkActions(
+          collection: 'equipment',
           count: notifier.selected.length,
           onDelete: () async {
             if (await confirm(context, 'Удалить выбранное оборудование?')) {
@@ -256,6 +262,9 @@ class _EquipmentListScreenState extends State<EquipmentListScreen> {
         ),
       );
   List<Widget> _actions(Equipment item) => RecordActions.buttons(
+        collection: 'equipment',
+        context: context,
+        onView: () => context.go('/equipment/${item.id}'),
         permissions: context.watch<SessionStore>().permissions,
         onEdit: () => context.go('/equipment/${item.id}/edit'),
         isDeleted: item.isDeleted,

@@ -1,11 +1,59 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../state/session.dart';
+import '../core/api_exceptions.dart';
+import '../core/errors.dart';
 
 const compactWidth = 900.0;
+
+/// Keeps URL-driven filters in sync without losing focus while typing.
+class QueryTextField extends StatefulWidget {
+  final String? value;
+  final InputDecoration decoration;
+  final TextInputType? keyboardType;
+  final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onFieldSubmitted;
+  const QueryTextField(
+      {super.key,
+      this.value,
+      required this.decoration,
+      this.keyboardType,
+      this.onChanged,
+      this.onFieldSubmitted});
+  @override
+  State<QueryTextField> createState() => _QueryTextFieldState();
+}
+
+class _QueryTextFieldState extends State<QueryTextField> {
+  late final TextEditingController _controller =
+      TextEditingController(text: widget.value ?? '');
+  @override
+  void didUpdateWidget(covariant QueryTextField oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (oldWidget.value != widget.value &&
+        _controller.text != (widget.value ?? '')) {
+      final text = widget.value ?? '';
+      _controller.value = TextEditingValue(
+          text: text, selection: TextSelection.collapsed(offset: text.length));
+    }
+  }
+
+  @override
+  void dispose() {
+    _controller.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) => TextFormField(
+      controller: _controller,
+      decoration: widget.decoration,
+      keyboardType: widget.keyboardType,
+      onChanged: widget.onChanged,
+      onFieldSubmitted: widget.onFieldSubmitted);
+}
 
 class AppScaffold extends StatelessWidget {
   final String title;
@@ -37,6 +85,12 @@ class AppScaffold extends StatelessWidget {
       (Icons.people, 'Клиенты', '/clients'),
       (Icons.lightbulb_outline, 'Оборудование', '/equipment'),
     ];
+    final permissions = context.watch<SessionStore>().permissions;
+    final visible = destinations
+        .where((d) => d.$3 != '/clients' || permissions.canManageClients)
+        .toList();
+    final visibleIndex =
+        visible.indexOf(destinations[index]).clamp(0, visible.length - 1);
     final compact = MediaQuery.sizeOf(context).width < compactWidth;
     final app = AppBar(
       title: Text(title),
@@ -56,10 +110,10 @@ class AppScaffold extends StatelessWidget {
           appBar: app,
           body: child,
           bottomNavigationBar: NavigationBar(
-              selectedIndex: index,
-              onDestinationSelected: (i) => context.go(destinations[i].$3),
+              selectedIndex: visibleIndex,
+              onDestinationSelected: (i) => context.go(visible[i].$3),
               destinations: [
-                for (final d in destinations)
+                for (final d in visible)
                   NavigationDestination(icon: Icon(d.$1), label: d.$2)
               ]));
     }
@@ -67,11 +121,11 @@ class AppScaffold extends StatelessWidget {
         appBar: app,
         body: Row(children: [
           NavigationRail(
-              selectedIndex: index,
+              selectedIndex: visibleIndex,
               extended: MediaQuery.sizeOf(context).width >= 1200,
-              onDestinationSelected: (i) => context.go(destinations[i].$3),
+              onDestinationSelected: (i) => context.go(visible[i].$3),
               destinations: [
-                for (final d in destinations)
+                for (final d in visible)
                   NavigationRailDestination(icon: Icon(d.$1), label: Text(d.$2))
               ]),
           const VerticalDivider(width: 1),
@@ -99,32 +153,26 @@ class SessionAction extends StatelessWidget {
     }
     return PopupMenuButton<String>(
       tooltip: user.fullName,
-      icon: CircleAvatar(
-        radius: 14,
-        child: Text(
-          user.fullName.isEmpty ? '?' : user.fullName[0].toUpperCase(),
-          style: const TextStyle(fontSize: 13),
-        ),
-      ),
+      child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12),
+          child: Row(mainAxisSize: MainAxisSize.min, children: [
+            CircleAvatar(
+                radius: 14,
+                child: Text(user.fullName.isEmpty
+                    ? '?'
+                    : user.fullName[0].toUpperCase())),
+            const SizedBox(width: 8),
+            ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 140),
+                child: Text(user.fullName, overflow: TextOverflow.ellipsis)),
+          ])),
       onSelected: (value) async {
-        if (value != 'logout') return;
-        // Всё, что нужно от контекста, берём до первого `await`:
-        // после ожидания контекст мог быть размонтирован.
-        final auth = context.read<AuthRepository>();
-        final navigator = GoRouter.of(context);
-        final prefs = await SharedPreferences.getInstance();
-        // Сессия закрывается на сервере, затем удаляется из
-        // локального хранилища.
-        try {
-          await auth.logout(session.refreshToken);
-        } catch (_) {
-          // Сервер может быть недоступен: локальную сессию
-          // завершаем в любом случае.
+        if (value == 'home') {
+          context.go('/');
+          return;
         }
+        if (value != 'logout') return;
         await session.logout();
-        await prefs.remove('focus_frame_api_token');
-        await prefs.remove('focus_frame_api_refresh');
-        navigator.go('/login');
       },
       itemBuilder: (context) => [
         PopupMenuItem<String>(
@@ -139,6 +187,7 @@ class SessionAction extends StatelessWidget {
             ],
           ),
         ),
+        const PopupMenuItem<String>(value: 'home', child: Text('Главная')),
         const PopupMenuDivider(),
         const PopupMenuItem<String>(
           value: 'logout',
@@ -226,4 +275,27 @@ void toast(BuildContext context, String message) {
       content: Text(message),
       behavior: SnackBarBehavior.floating,
     ));
+}
+
+/// A rejected mutation must not replace a successfully loaded list with an
+/// error screen. Keep the server's explanation visible until it is dismissed.
+Future<void> showOperationError(BuildContext context, Object error) async {
+  if (!context.mounted) return;
+  if (error is ConflictException || error is LinkedRecordsException) {
+    await showDialog<void>(
+      context: context,
+      builder: (dialogContext) => AlertDialog(
+        title: const Text('Операция не выполнена'),
+        content: Text('${error.toString()}\n\nДанные не изменены.'),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(dialogContext),
+            child: const Text('Понятно'),
+          ),
+        ],
+      ),
+    );
+    return;
+  }
+  toast(context, error.toString());
 }

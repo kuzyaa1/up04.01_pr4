@@ -30,10 +30,8 @@ class InMemoryPhotographerRepository extends InMemoryRepository<Photographer>
           ? item.copyWith(clearDeletedAt: true)
           : item.copyWith(deletedAt: deletedAt);
   @override
-  Future<PageResult<Photographer>> find(
-    PhotographerQuery query, {
-    CancelToken? cancelToken,
-  }) async {
+  Future<PageResult<Photographer>> find(PhotographerQuery query,
+      {CancelToken? cancelToken}) async {
     if (query.experienceFrom != null &&
         query.experienceTo != null &&
         query.experienceFrom! > query.experienceTo!) {
@@ -102,6 +100,7 @@ class InMemoryPhotographerRepository extends InMemoryRepository<Photographer>
 
   @override
   Future<Photographer> save(Photographer photographer) async {
+    await saveGuard?.call(photographer);
     final duplicate = items.any((x) =>
         x.id != photographer.id &&
         !x.isDeleted &&
@@ -142,24 +141,28 @@ class InMemoryPhotographerRepository extends InMemoryRepository<Photographer>
 
   @override
   Future<void> softDelete(int id) async {
+    await checkDeletion([id]);
     markDeleted(id);
     await persist();
   }
 
   @override
   Future<void> hardDelete(int id) async {
+    await checkDeletion([id], hard: true);
     remove(id);
     await persist();
   }
 
   @override
   Future<void> restore(int id) async {
-    markRestored(id);
-    await persist();
+    final item = await findById(id);
+    if (item == null) throw StateError('Запись #$id не найдена');
+    await save(rowWithDeletedAt(item, null));
   }
 
   @override
   Future<int> softDeleteMany(List<int> ids) async {
+    await checkDeletion(ids);
     var count = 0;
     for (final id in ids) {
       final exists = items.any((x) => x.id == id && !x.isDeleted);
@@ -173,6 +176,7 @@ class InMemoryPhotographerRepository extends InMemoryRepository<Photographer>
 
   @override
   Future<int> hardDeleteMany(List<int> ids) async {
+    await checkDeletion(ids, hard: true);
     final before = items.length;
     for (final id in ids) {
       remove(id);

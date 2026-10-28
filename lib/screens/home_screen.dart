@@ -13,6 +13,7 @@ class HomeScreen extends StatelessWidget {
   Widget build(BuildContext context) {
     final session = context.watch<SessionStore>();
     final user = session.user;
+    final permissions = session.permissions;
     final entities = [
       (
         Icons.event_available,
@@ -52,18 +53,46 @@ class HomeScreen extends StatelessWidget {
                     style: Theme.of(context).textTheme.headlineSmall),
                 const SizedBox(height: 12),
                 const Text(
-                  'Пять сущностей со всеми тремя типами связей: формы создания '
-                  'и редактирования, поиск, фильтрация, сортировка, '
-                  'постраничный вывод и логическое с физическое удаление.',
+                  'Выберите зал для съёмки, управляйте своими бронированиями '
+                  'или откройте рабочий раздел своей роли.',
                 ),
                 const SizedBox(height: 16),
                 _sessionCard(context, session, user),
                 const SizedBox(height: 24),
+                Wrap(spacing: 12, runSpacing: 12, children: [
+                  if (permissions.canBookOwn)
+                    FilledButton.icon(
+                        onPressed: () => context.go('/my-bookings/new'),
+                        icon: const Icon(Icons.add),
+                        label: const Text('Забронировать зал')),
+                  if (permissions.canUseClientPortal)
+                    FilledButton.icon(
+                        onPressed: () => context.go('/my-bookings'),
+                        icon: const Icon(Icons.event),
+                        label: const Text('Мои бронирования')),
+                  if (permissions.canUseManagerWorkspace)
+                    FilledButton.icon(
+                        onPressed: () => context.go('/manager'),
+                        icon: const Icon(Icons.work),
+                        label: const Text('Рабочее место менеджера')),
+                  if (permissions.canManageUsers)
+                    FilledButton.icon(
+                        onPressed: () => context.go('/admin/users'),
+                        icon: const Icon(Icons.manage_accounts),
+                        label: const Text('Пользователи и роли')),
+                  if (permissions.canViewStatistics)
+                    OutlinedButton.icon(
+                        onPressed: () => context.go('/admin/statistics'),
+                        icon: const Icon(Icons.bar_chart),
+                        label: const Text('Статистика студии')),
+                ]),
+                const SizedBox(height: 20),
                 Wrap(
                   spacing: 16,
                   runSpacing: 16,
                   children: [
-                    for (final entity in entities)
+                    for (final entity in entities.where((e) =>
+                        e.$3 != '/clients' || permissions.canManageClients))
                       SizedBox(
                         width: 250,
                         child: Card(
@@ -159,7 +188,7 @@ class HomeScreen extends StatelessWidget {
               if (permissions.isReadOnly)
                 const Chip(
                   avatar: Icon(Icons.lock_outline, size: 16),
-                  label: Text('только чтение'),
+                  label: Text('каталог: просмотр'),
                 ),
             ]),
             const SizedBox(height: 12),

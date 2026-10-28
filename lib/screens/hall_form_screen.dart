@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../core/form_outcome.dart';
+import '../widgets/state_views.dart';
 import '../core/validators.dart';
 import '../models/studio_hall.dart';
 import '../repositories/hall_repository.dart';
@@ -13,7 +14,6 @@ class HallFormScreen extends StatefulWidget {
   final int? id;
   const HallFormScreen({super.key, this.id});
   bool get isEditing => id != null;
-
   @override
   State<HallFormScreen> createState() => _HallFormScreenState();
 }
@@ -24,8 +24,9 @@ class _HallFormScreenState extends State<HallFormScreen> {
   StudioHall? _hall;
   final Map<String, String?> _serverErrors = {};
   bool _loading = true;
-  bool _dirty = false;
   bool _saving = false;
+  String? _loadError;
+  bool _dirty = false;
   int _revision = 0;
   @override
   void initState() {
@@ -34,15 +35,27 @@ class _HallFormScreenState extends State<HallFormScreen> {
   }
 
   Future<void> _load() async {
-    StudioHall? hall;
-    if (widget.id != null) {
-      hall = await context.read<HallRepository>().findById(widget.id!);
-    }
-    if (!mounted) return;
     setState(() {
-      _hall = hall;
-      _loading = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      StudioHall? hall;
+      if (widget.id != null) {
+        hall = await context.read<HallRepository>().findById(widget.id!);
+      }
+      if (!mounted) return;
+      setState(() {
+        _hall = hall;
+        _loading = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   List<FieldSpec> _fields(CatalogNotifier catalog) {
@@ -50,13 +63,14 @@ class _HallFormScreenState extends State<HallFormScreen> {
     return [
       FieldSpec(
         name: 'name',
+        serverError: _serverErrors['name'],
         label: 'Название зала',
         initialValue: hall?.name,
         validators: [V.required(), V.length(min: 2, max: 80)],
-        serverError: _serverErrors['name'],
       ),
       FieldSpec(
         name: 'code',
+        serverError: _serverErrors['code'],
         label: 'Код зала',
         initialValue: hall?.code,
         hint: 'Уникальный код, например A-01',
@@ -67,11 +81,11 @@ class _HallFormScreenState extends State<HallFormScreen> {
               ? null
               : 'Допустимы латинские буквы, цифры и дефис',
         ],
-        serverError: _serverErrors['code'],
         width: 240,
       ),
       FieldSpec(
         name: 'style',
+        serverError: _serverErrors['style'],
         label: 'Стиль съёмки',
         type: catalog.hallStyles.isEmpty
             ? FieldType.text
@@ -83,36 +97,33 @@ class _HallFormScreenState extends State<HallFormScreen> {
             TextDropdownEntry(style, style),
         ],
         validators: [V.required(), V.length(min: 3, max: 40)],
-        serverError: _serverErrors['style'],
         width: 320,
       ),
       FieldSpec(
         name: 'capacity',
+        serverError: _serverErrors['capacity'],
         label: 'Вместимость, чел.',
         type: FieldType.number,
         initialValue: hall?.capacity ?? 5,
         validators: [V.positive(label: 'Вместимость')],
-        serverError: _serverErrors['capacity'],
         width: 200,
       ),
       FieldSpec(
         name: 'hourlyRate',
+        serverError: _serverErrors['hourlyRate'],
         label: 'Цена за час, ₽',
         type: FieldType.number,
         initialValue: hall?.hourlyRate ?? 2000,
         validators: [V.integer(min: 500, max: 100000, label: 'Цена')],
-        serverError: _serverErrors['hourlyRate'],
         width: 220,
       ),
       FieldSpec(
-        name: 'description',
-        label: 'Описание',
-        type: FieldType.multiline,
-        initialValue: hall?.description ?? '',
-        hint: 'Необязательно: особенности зала, техника, условия',
-        validators: [V.length(max: 300)],
-        serverError: _serverErrors['description'],
-      ),
+          name: 'description',
+          label: 'Описание',
+          type: FieldType.multiline,
+          initialValue: hall?.description,
+          validators: [V.length(max: 500)],
+          serverError: _serverErrors['description']),
     ];
   }
 
@@ -164,7 +175,6 @@ class _HallFormScreenState extends State<HallFormScreen> {
   }
 
   void _cancel() {
-    _dirty = false;
     context.go('/halls');
   }
 
@@ -172,26 +182,33 @@ class _HallFormScreenState extends State<HallFormScreen> {
   Widget build(BuildContext context) {
     final catalog = context.watch<CatalogNotifier>();
     return DirtyGuard(
-      dirty: _dirty,
+      isDirty: () => _dirty,
+      fallbackLocation: '/halls',
       message: 'Есть несохранённые изменения в зале. Выйти без сохранения?',
       child: Scaffold(
         appBar: AppBar(
+          leading: BackButton(onPressed: () => context.go('/halls')),
           title: Text(_hall == null ? 'Новый зал' : 'Редактирование зала'),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
-            : EntityForm(
-                key: _entityFormKey,
-                formKey: _formKey,
-                fields: _fields(catalog),
-                rebuildToken: _revision,
-                saveLabel:
-                    _hall == null ? 'Создать зал' : 'Сохранить изменения',
-                saving: _saving,
-                onSubmit: _save,
-                onCancel: _cancel,
-                onChanged: () => _dirty = true,
-              ),
+            : _loadError != null
+                ? ErrorView(message: _loadError!, onRetry: _load)
+                : widget.id != null && _hall == null
+                    ? const Center(child: Text('Запись не найдена'))
+                    : EntityForm(
+                        key: _entityFormKey,
+                        formKey: _formKey,
+                        saving: _saving,
+                        fields: _fields(catalog),
+                        rebuildToken: _revision,
+                        saveLabel: _hall == null
+                            ? 'Создать зал'
+                            : 'Сохранить изменения',
+                        onSubmit: _save,
+                        onCancel: _cancel,
+                        onChanged: () => setState(() => _dirty = true),
+                      ),
       ),
     );
   }

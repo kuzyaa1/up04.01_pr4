@@ -2,9 +2,11 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../core/form_outcome.dart';
+import '../widgets/state_views.dart';
 import '../core/validators.dart';
 import '../models/client.dart';
 import '../repositories/client_repository.dart';
+import '../state/catalog_notifier.dart';
 import '../widgets/dirty_guard.dart';
 import '../widgets/entity_form.dart';
 
@@ -22,31 +24,48 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
   Client? _client;
   final Map<String, String?> _serverErrors = {};
   bool _loading = true;
-  bool _dirty = false;
   bool _saving = false;
+  String? _loadError;
+  bool _dirty = false;
   int _revision = 0;
+  late final Future<List<String>> _types;
   String _clientType = 'Частный';
   @override
   void initState() {
     super.initState();
+    _types = _loadTypes();
     _load();
   }
 
   Future<void> _load() async {
-    Client? client;
-    if (widget.id != null) {
-      client = await context.read<ClientRepository>().findById(widget.id!);
-    }
-    if (!mounted) return;
     setState(() {
-      _client = client;
-      _clientType = client?.clientType ?? 'Частный';
-      _loading = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      Client? client;
+      if (widget.id != null) {
+        client = await context.read<ClientRepository>().findById(widget.id!);
+      }
+      if (!mounted) return;
+      setState(() {
+        _client = client;
+        _clientType = client?.clientType ?? 'Частный';
+        _loading = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   Future<List<String>> _loadTypes() async {
-    final clients = await context.read<ClientRepository>().all();
+    final catalog = context.read<CatalogNotifier>();
+    await catalog.load();
+    final clients = catalog.clients;
     final values = clients
         .map((client) => client.clientType)
         .where((type) => type.trim().isNotEmpty)
@@ -66,31 +85,33 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
     return [
       FieldSpec(
         name: 'name',
+        serverError: _serverErrors['fullName'],
         label: 'Имя клиента',
         initialValue: client?.name,
         validators: [V.required(), V.length(min: 2, max: 80)],
       ),
       FieldSpec(
         name: 'email',
+        serverError: _serverErrors['email'],
         label: 'Email для связи',
         type: FieldType.email,
         initialValue: client?.email,
         hint: 'Уникальный адрес',
-        validators: [V.required(), V.email()],
-        serverError: _serverErrors['email'],
+        validators: [V.required(), V.length(max: 254), V.email()],
         width: 340,
       ),
       FieldSpec(
         name: 'phone',
+        serverError: _serverErrors['phone'],
         label: 'Телефон',
         type: FieldType.phone,
         initialValue: client?.phone,
         validators: [V.required(), V.phone()],
-        serverError: _serverErrors['phone'],
         width: 260,
       ),
       FieldSpec(
         name: 'clientType',
+        serverError: _serverErrors['clientType'],
         label: 'Тип клиента',
         type: FieldType.dropdownText,
         initialValue: _clientType,
@@ -104,6 +125,7 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
       if (isCorporate)
         FieldSpec(
           name: 'company',
+          serverError: _serverErrors['company'],
           label: 'Компания',
           initialValue: client?.company,
           hint: 'Название организации',
@@ -112,6 +134,7 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
         ),
       FieldSpec(
         name: 'cardNumber',
+        serverError: _serverErrors['cardNumber'],
         label: 'Номер абонемента',
         initialValue: client?.cardNumber,
         hint: 'Уникальный номер, например AB-0001',
@@ -124,11 +147,11 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
                   ? null
                   : 'Допустимы буквы, цифры и дефис',
         ],
-        serverError: _serverErrors['cardNumber'],
         width: 260,
       ),
       FieldSpec(
         name: 'cardIssuedAt',
+        serverError: _serverErrors['cardIssuedAt'],
         label: 'Дата выдачи (ГГГГ-ММ-ДД)',
         type: FieldType.date,
         initialValue: client?.cardIssuedAt ?? _dateText(today),
@@ -138,6 +161,7 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
       ),
       FieldSpec(
         name: 'cardExpiresAt',
+        serverError: _serverErrors['cardExpiresAt'],
         label: 'Действует до (ГГГГ-ММ-ДД)',
         type: FieldType.date,
         initialValue:
@@ -147,7 +171,9 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
         groupTitle: 'Абонемент',
         hint: 'Необязательно',
         validators: [
-          V.date(min: DateTime(today.year - 10)),
+          (value) => (value?.trim().isEmpty ?? true)
+              ? null
+              : V.date(min: DateTime(today.year - 10))(value),
           (value) {
             final issued = _entityFormKey.currentState?.string('cardIssuedAt');
             final expires = value?.trim() ?? '';
@@ -164,6 +190,7 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
       ),
       FieldSpec(
         name: 'notes',
+        serverError: _serverErrors['notes'],
         label: 'Пожелания и заметки',
         type: FieldType.multiline,
         initialValue: client?.notes ?? '',
@@ -207,6 +234,8 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
             deletedAt: _client?.deletedAt,
           ));
       _dirty = false;
+      if (!mounted) return;
+      await context.read<CatalogNotifier>().load(force: true);
       if (mounted) context.go('/clients');
     } on Object catch (error) {
       if (!mounted) return;
@@ -230,42 +259,47 @@ class _ClientFormScreenState extends State<ClientFormScreen> {
   String _dateText(DateTime date) =>
       '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   void _cancel() {
-    _dirty = false;
     context.go('/clients');
   }
 
   @override
   Widget build(BuildContext context) {
     return DirtyGuard(
-      dirty: _dirty,
+      isDirty: () => _dirty,
+      fallbackLocation: '/clients',
       message:
           'Есть несохранённые изменения в карточке клиента. Выйти без сохранения?',
       child: Scaffold(
         appBar: AppBar(
+          leading: BackButton(onPressed: () => context.go('/clients')),
           title:
               Text(_client == null ? 'Новый клиент' : 'Редактирование клиента'),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
-            : FutureBuilder<List<String>>(
-                future: _loadTypes(),
-                builder: (context, snapshot) {
-                  final types = snapshot.data ?? Client.clientTypes;
-                  return EntityForm(
-                    key: _entityFormKey,
-                    formKey: _formKey,
-                    fields: _fields(types),
-                    rebuildToken: _revision,
-                    saveLabel: _client == null
-                        ? 'Создать клиента'
-                        : 'Сохранить изменения',
-                    saving: _saving,
-                    onSubmit: _save,
-                    onCancel: _cancel,
-                    onChanged: () => _dirty = true,
-                  );
-                },
-              ),
+            : _loadError != null
+                ? ErrorView(message: _loadError!, onRetry: _load)
+                : widget.id != null && _client == null
+                    ? const Center(child: Text('Запись не найдена'))
+                    : FutureBuilder<List<String>>(
+                        future: _types,
+                        builder: (context, snapshot) {
+                          final types = snapshot.data ?? Client.clientTypes;
+                          return EntityForm(
+                            key: _entityFormKey,
+                            formKey: _formKey,
+                            saving: _saving,
+                            fields: _fields(types),
+                            rebuildToken: _revision,
+                            saveLabel: _client == null
+                                ? 'Создать клиента'
+                                : 'Сохранить изменения',
+                            onSubmit: _save,
+                            onCancel: _cancel,
+                            onChanged: () => setState(() => _dirty = true),
+                          );
+                        },
+                      ),
       ),
     );
   }

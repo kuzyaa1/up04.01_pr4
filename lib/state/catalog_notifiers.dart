@@ -33,24 +33,28 @@ class BookingListNotifier extends ListNotifier<Booking> {
   @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> hardDelete(int id) async {
     await _repo.hardDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> deleteSelected() async {
     await _repo.softDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -58,6 +62,7 @@ class BookingListNotifier extends ListNotifier<Booking> {
   @override
   Future<void> eraseSelected() async {
     await _repo.hardDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -68,12 +73,14 @@ class BookingListNotifier extends ListNotifier<Booking> {
   /// показывает это понятным сообщением.
   Future<void> cancel(int id) async {
     await _repo.cancel(id);
+    await onMutation?.call();
     await load();
   }
 
   /// Завершает бронирование.
   Future<void> complete(int id) async {
     await _repo.complete(id);
+    await onMutation?.call();
     await load();
   }
 }
@@ -99,24 +106,28 @@ class ClientListNotifier extends ListNotifier<Client> {
   @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> hardDelete(int id) async {
     await _repo.hardDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> deleteSelected() async {
     await _repo.softDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -124,6 +135,7 @@ class ClientListNotifier extends ListNotifier<Client> {
   @override
   Future<void> eraseSelected() async {
     await _repo.hardDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -150,24 +162,28 @@ class EquipmentListNotifier extends ListNotifier<Equipment> {
   @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> hardDelete(int id) async {
     await _repo.hardDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> deleteSelected() async {
     await _repo.softDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -175,6 +191,7 @@ class EquipmentListNotifier extends ListNotifier<Equipment> {
   @override
   Future<void> eraseSelected() async {
     await _repo.hardDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }

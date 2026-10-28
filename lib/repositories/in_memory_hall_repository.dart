@@ -30,10 +30,8 @@ class InMemoryHallRepository extends InMemoryRepository<StudioHall>
           ? item.copyWith(clearDeletedAt: true)
           : item.copyWith(deletedAt: deletedAt);
   @override
-  Future<PageResult<StudioHall>> find(
-    HallQuery query, {
-    CancelToken? cancelToken,
-  }) async {
+  Future<PageResult<StudioHall>> find(HallQuery query,
+      {CancelToken? cancelToken}) async {
     if (query.capacityFrom != null &&
         query.capacityTo != null &&
         query.capacityFrom! > query.capacityTo!) {
@@ -93,6 +91,7 @@ class InMemoryHallRepository extends InMemoryRepository<StudioHall>
 
   @override
   Future<StudioHall> save(StudioHall hall) async {
+    await saveGuard?.call(hall);
     final code = hall.code.trim().toUpperCase();
     final duplicate = items.any(
         (x) => x.id != hall.id && x.code.toUpperCase() == code && !x.isDeleted);
@@ -106,6 +105,7 @@ class InMemoryHallRepository extends InMemoryRepository<StudioHall>
             name: hall.name.trim(),
             code: code,
             style: hall.style,
+            description: hall.description,
             capacity: hall.capacity,
             hourlyRate: hall.hourlyRate,
             equipmentIds: hall.equipmentIds,
@@ -124,24 +124,28 @@ class InMemoryHallRepository extends InMemoryRepository<StudioHall>
 
   @override
   Future<void> softDelete(int id) async {
+    await checkDeletion([id]);
     markDeleted(id);
     await persist();
   }
 
   @override
   Future<void> hardDelete(int id) async {
+    await checkDeletion([id], hard: true);
     remove(id);
     await persist();
   }
 
   @override
   Future<void> restore(int id) async {
-    markRestored(id);
-    await persist();
+    final item = await findById(id);
+    if (item == null) throw StateError('Запись #$id не найдена');
+    await save(rowWithDeletedAt(item, null));
   }
 
   @override
   Future<int> softDeleteMany(List<int> ids) async {
+    await checkDeletion(ids);
     var count = 0;
     for (final id in ids) {
       final index = items.indexWhere((x) => x.id == id && !x.isDeleted);
@@ -155,6 +159,7 @@ class InMemoryHallRepository extends InMemoryRepository<StudioHall>
 
   @override
   Future<int> hardDeleteMany(List<int> ids) async {
+    await checkDeletion(ids, hard: true);
     final before = items.length;
     for (final id in ids) {
       remove(id);

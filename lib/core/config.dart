@@ -33,3 +33,11 @@ const int maxReadRetries = 3;
 /// Пауза перед первым повтором, миллисекунды. Дальше пауза растёт
 /// экспоненциально: base * 2^(номер попытки - 1).
 const int retryBaseDelayMs = 400;
+
+const apiDemoDelayMs = int.fromEnvironment('API_DEMO_DELAY_MS');
+const apiDemoFail = int.fromEnvironment('API_DEMO_FAIL');
+
+const sessionIdleSeconds =
+    int.fromEnvironment('SESSION_IDLE_SECONDS', defaultValue: 180);
+const sessionMaxSeconds =
+    int.fromEnvironment('SESSION_MAX_SECONDS', defaultValue: 1800);

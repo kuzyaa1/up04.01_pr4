@@ -33,24 +33,28 @@ class HallListNotifier extends ListNotifier<StudioHall> {
   @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> hardDelete(int id) async {
     await _repo.hardDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> deleteSelected() async {
     await _repo.softDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -58,6 +62,7 @@ class HallListNotifier extends ListNotifier<StudioHall> {
   @override
   Future<void> eraseSelected() async {
     await _repo.hardDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -84,24 +89,28 @@ class PhotographerListNotifier extends ListNotifier<Photographer> {
   @override
   Future<void> softDelete(int id) async {
     await _repo.softDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> hardDelete(int id) async {
     await _repo.hardDelete(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> restore(int id) async {
     await _repo.restore(id);
+    await onMutation?.call();
     await load();
   }
 
   @override
   Future<void> deleteSelected() async {
     await _repo.softDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }
@@ -109,6 +118,7 @@ class PhotographerListNotifier extends ListNotifier<Photographer> {
   @override
   Future<void> eraseSelected() async {
     await _repo.hardDeleteMany(selectedIds);
+    await onMutation?.call();
     clearSelection();
     await load();
   }

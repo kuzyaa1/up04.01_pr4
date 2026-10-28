@@ -6,6 +6,7 @@ import 'package:photo_studio_portal/models/hall_query.dart';
 import 'package:photo_studio_portal/repositories/in_memory_hall_repository.dart';
 import 'package:photo_studio_portal/repositories/in_memory_photographer_repository.dart';
 import 'package:photo_studio_portal/screens/client_form_screen.dart';
+import 'package:photo_studio_portal/screens/booking_form_screen.dart';
 import 'package:photo_studio_portal/screens/hall_form_screen.dart';
 import 'package:photo_studio_portal/state/catalog_notifier.dart';
 import 'package:photo_studio_portal/repositories/booking_repository.dart';
@@ -48,6 +49,27 @@ void main() {
     await tester.pumpAndSettle();
   }
 
+  testWidgets('форма бронирования показывает текстовые поля рядом со связями',
+      (tester) async {
+    SharedPreferences.setMockInitialValues({});
+    final prefs = await SharedPreferences.getInstance();
+    await harness(tester, const BookingFormScreen(),
+        clients: ClientRepositoryImpl(prefs),
+        halls: InMemoryHallRepository(prefs),
+        photographers: InMemoryPhotographerRepository(prefs),
+        equipment: EquipmentRepositoryImpl(prefs),
+        bookings: PersistentBookingRepository(prefs));
+    for (final label in [
+      'Почта для связи',
+      'Дата съёмки (ГГГГ-ММ-ДД)',
+      'Код бронирования',
+      'Длительность, ч',
+      'Участников',
+      'Тип съёмки'
+    ]) {
+      expect(find.widgetWithText(TextFormField, label), findsOneWidget);
+    }
+  });
   testWidgets('форма зала показывает ошибки под полями, а не общим текстом',
       (tester) async {
     SharedPreferences.setMockInitialValues({});
@@ -181,6 +203,7 @@ void main() {
         bookings: PersistentBookingRepository(prefs));
     final hall = StudioHall.fromJson(const {});
     expect(hall.bookingIds, isEmpty);
-    expect(find.text('Стиль съёмки'), findsOneWidget);
+    expect(find.widgetWithText(DropdownButtonFormField<String>, 'Стиль съёмки'),
+        findsOneWidget);
   });
 }

@@ -55,6 +55,7 @@ class V {
           return 'Код состоит из латинских букв, цифр и дефиса';
         }
         if (text.length < 6) return 'Код не короче 6 символов';
+        if (text.length > 40) return 'Максимум символов: 40';
         return null;
       };
   static Validator containsDigit([String message = 'Добавьте цифру']) =>
@@ -62,7 +63,7 @@ class V {
   static Validator date({DateTime? min, DateTime? max}) => (value) {
         final text = value?.trim() ?? '';
         if (text.isEmpty) return 'Введите дату в формате ГГГГ-ММ-ДД';
-        final date = DateTime.tryParse(text);
+        final date = parseDate(text);
         if (date == null) return 'Некорректная дата, формат ГГГГ-ММ-ДД';
         if (min != null && date.isBefore(min)) {
           return 'Дата не раньше ${min.year}-${_two(min.month)}-${_two(min.day)}';
@@ -72,6 +73,16 @@ class V {
         }
         return null;
       };
+  static DateTime? parseDate(String text) {
+    if (!RegExp(r'^\d{4}-\d{2}-\d{2}$').hasMatch(text)) return null;
+    final date = DateTime.tryParse(text);
+    if (date == null || date.year < 1) return null;
+    return '${date.year.toString().padLeft(4, '0')}-${_two(date.month)}-${_two(date.day)}' ==
+            text
+        ? date
+        : null;
+  }
+
   static Validator notPast() => (value) {
         final error = date()(value);
         if (error != null) return error;

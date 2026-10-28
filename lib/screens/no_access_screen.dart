@@ -13,7 +13,7 @@ class NoAccessScreen extends StatelessWidget {
   const NoAccessScreen({
     super.key,
     this.title = 'Недостаточно прав',
-    this.message = 'Ваша роль не позволяет изменять данные студии.',
+    this.message = 'У вашей роли нет доступа к этому разделу.',
   });
 
   @override

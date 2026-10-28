@@ -1,3 +1,5 @@
+import 'dart:async';
+import 'common.dart';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
 
@@ -17,13 +19,13 @@ class RecordActions extends StatelessWidget {
   final VoidCallback onEdit;
 
   /// Что делать при нажатии «Удалить» (логическое удаление).
-  final VoidCallback? onSoftDelete;
+  final FutureOr<void> Function()? onSoftDelete;
 
   /// Что делать при нажатии «Восстановить».
-  final VoidCallback? onRestore;
+  final FutureOr<void> Function()? onRestore;
 
   /// Что делать при нажатии «Стереть навсегда» (физическое удаление).
-  final VoidCallback? onHardDelete;
+  final FutureOr<void> Function()? onHardDelete;
 
   /// Запись удалена: показывать «Восстановить» вместо «Удалить».
   final bool isDeleted;
@@ -42,37 +44,52 @@ class RecordActions extends StatelessWidget {
   /// Список, а не готовый виджет: ячейка таблицы и карточка кладут
   /// кнопки в свои контейнеры (строку таблицы или `Wrap`).
   static List<Widget> buttons({
+    String collection = 'bookings',
+    VoidCallback? onBook,
+    VoidCallback? onView,
+    required BuildContext context,
     required Permissions permissions,
     required VoidCallback onEdit,
-    VoidCallback? onSoftDelete,
-    VoidCallback? onRestore,
-    VoidCallback? onHardDelete,
+    FutureOr<void> Function()? onSoftDelete,
+    FutureOr<void> Function()? onRestore,
+    FutureOr<void> Function()? onHardDelete,
     bool isDeleted = false,
   }) {
     return [
-      if (permissions.canUpdate)
+      if (onBook != null)
+        IconButton(
+            tooltip: 'Забронировать зал',
+            onPressed: onBook,
+            icon: const Icon(Icons.event_available)),
+      if (onView != null)
+        IconButton(
+            tooltip: 'Просмотреть',
+            onPressed: onView,
+            icon: const Icon(Icons.visibility_outlined)),
+      if (permissions.canManageEntity(collection))
         IconButton(
           tooltip: 'Редактировать',
           onPressed: onEdit,
           icon: const Icon(Icons.edit_outlined),
         ),
-      if (isDeleted)
-        if (permissions.canRestore)
-          IconButton(
-            tooltip: 'Восстановить',
-            onPressed: onRestore,
-            icon: const Icon(Icons.restore),
-          )
-        else if (permissions.canSoftDelete)
-          IconButton(
-            tooltip: 'Удалить',
-            onPressed: onSoftDelete,
-            icon: const Icon(Icons.delete_outline),
-          ),
+      if (isDeleted && permissions.canRestore)
+        IconButton(
+          tooltip: 'Восстановить',
+          onPressed: onRestore == null ? null : () => _run(context, onRestore),
+          icon: const Icon(Icons.restore),
+        ),
+      if (!isDeleted && permissions.canManageEntity(collection))
+        IconButton(
+          tooltip: 'Удалить',
+          onPressed:
+              onSoftDelete == null ? null : () => _run(context, onSoftDelete),
+          icon: const Icon(Icons.delete_outline),
+        ),
       if (permissions.canHardDelete)
         IconButton(
           tooltip: 'Стереть навсегда',
-          onPressed: onHardDelete,
+          onPressed:
+              onHardDelete == null ? null : () => _run(context, onHardDelete),
           icon: const Icon(Icons.delete_forever),
         ),
     ];
@@ -84,6 +101,7 @@ class RecordActions extends StatelessWidget {
     return Row(
       mainAxisSize: MainAxisSize.min,
       children: buttons(
+        context: context,
         permissions: permissions,
         onEdit: onEdit,
         onSoftDelete: onSoftDelete,
@@ -98,14 +116,21 @@ class RecordActions extends StatelessWidget {
 /// Кнопка «Создать» с учётом прав.
 class CreateButton extends StatelessWidget {
   final String label;
+  final String collection;
   final VoidCallback onPressed;
 
-  const CreateButton({super.key, required this.label, required this.onPressed});
+  const CreateButton(
+      {super.key,
+      required this.label,
+      required this.onPressed,
+      this.collection = 'bookings'});
 
   @override
   Widget build(BuildContext context) {
     final permissions = context.watch<SessionStore>().permissions;
-    if (!permissions.canCreate) return const SizedBox.shrink();
+    if (!permissions.canCreateEntity(collection)) {
+      return const SizedBox.shrink();
+    }
     return FilledButton.icon(
       onPressed: onPressed,
       icon: const Icon(Icons.add),
@@ -116,14 +141,16 @@ class CreateButton extends StatelessWidget {
 
 /// Панель массовых операций с учётом прав.
 class BulkActions extends StatelessWidget {
+  final String collection;
   final int count;
-  final VoidCallback onDelete;
-  final VoidCallback onErase;
+  final FutureOr<void> Function() onDelete;
+  final FutureOr<void> Function() onErase;
   final VoidCallback onClearSelection;
 
   const BulkActions({
     super.key,
     required this.count,
+    this.collection = 'bookings',
     required this.onDelete,
     required this.onErase,
     required this.onClearSelection,
@@ -132,16 +159,21 @@ class BulkActions extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final permissions = context.watch<SessionStore>().permissions;
-    if (!permissions.canBulkDelete) return const SizedBox.shrink();
+    if (!permissions.canManageEntity(collection)) {
+      return const SizedBox.shrink();
+    }
     return Wrap(
       spacing: 8,
       children: [
         Text('Выбрано: $count'),
         if (permissions.canSoftDelete)
-          FilledButton(onPressed: onDelete, child: const Text('Удалить')),
+          FilledButton(
+              onPressed: () => _run(context, onDelete),
+              child: const Text('Удалить')),
         if (permissions.canHardDelete)
           OutlinedButton(
-              onPressed: onErase, child: const Text('Стереть навсегда')),
+              onPressed: () => _run(context, onErase),
+              child: const Text('Стереть навсегда')),
         TextButton(
             onPressed: onClearSelection, child: const Text('Снять выделение')),
       ],
@@ -167,15 +199,26 @@ class ReadOnlyNotice extends StatelessWidget {
         const SizedBox(width: 8),
         Expanded(
           child: Text(
-            permissions.isAuthenticated
-                ? 'Роль «${permissions.role.title}»: только просмотр. '
-                    'Изменение данных доступно менеджеру студии.'
-                : 'Вы не вошли в систему: доступен только просмотр. '
-                    'Войдите под учётной записью менеджера, чтобы изменять данные.',
+            permissions.canBookOwn
+                ? 'Вы можете бронировать залы для себя и продлевать свои записи. Справочники доступны для просмотра.'
+                : permissions.isAuthenticated
+                    ? 'Роль «${permissions.role.title}»: только просмотр. '
+                        'Изменение данных доступно менеджеру студии.'
+                    : 'Вы не вошли в систему: доступен только просмотр. '
+                        'Войдите под учётной записью менеджера, чтобы изменять данные.',
             style: Theme.of(context).textTheme.bodySmall,
           ),
         ),
       ]),
     );
+  }
+}
+
+Future<void> _run(
+    BuildContext context, FutureOr<void> Function() action) async {
+  try {
+    await action();
+  } on Object catch (error) {
+    if (context.mounted) await showOperationError(context, error);
   }
 }

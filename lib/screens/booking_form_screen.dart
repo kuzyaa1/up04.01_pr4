@@ -2,17 +2,22 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../core/form_outcome.dart';
+import '../widgets/state_views.dart';
 import '../core/validators.dart';
 import '../models/booking.dart';
 import '../models/photographer.dart';
 import '../repositories/booking_repository.dart';
 import '../state/catalog_notifier.dart';
+import '../state/session.dart';
 import '../widgets/dirty_guard.dart';
 import '../widgets/entity_form.dart';
 
 class BookingFormScreen extends StatefulWidget {
   final int? id;
-  const BookingFormScreen({super.key, this.id});
+  final bool selfService;
+  final int? initialHallId;
+  const BookingFormScreen(
+      {super.key, this.id, this.selfService = false, this.initialHallId});
   bool get isEditing => id != null;
   @override
   State<BookingFormScreen> createState() => _BookingFormScreenState();
@@ -25,10 +30,12 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
 
   final Map<String, String?> _serverErrors = {};
   bool _loading = true;
-  bool _dirty = false;
   bool _saving = false;
+  String? _loadError;
+  bool _dirty = false;
   int? _selectedHallId;
   int _revision = 0;
+  String get _returnPath => widget.selfService ? '/my-bookings' : '/bookings';
   @override
   void initState() {
     super.initState();
@@ -36,45 +43,65 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   }
 
   Future<void> _load() async {
-    final catalog = context.read<CatalogNotifier>();
-    final repository = context.read<BookingRepository>();
-    if (!catalog.loaded) await catalog.load();
-    Booking? booking;
-    if (widget.id != null) {
-      booking = await repository.findById(widget.id!);
-    }
-    if (!mounted) return;
     setState(() {
-      _booking = booking;
-      _selectedHallId = booking?.hallId;
-      _loading = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      final catalog = context.read<CatalogNotifier>();
+      final repository = context.read<BookingRepository>();
+      await catalog.load();
+      if (catalog.error != null) throw StateError(catalog.error!);
+      Booking? booking;
+      if (widget.id != null) {
+        booking = await repository.findById(widget.id!);
+      }
+      if (!mounted) return;
+      setState(() {
+        _booking = booking;
+        _selectedHallId = booking?.hallId ?? widget.initialHallId;
+        _loading = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   List<FieldSpec> _fields(CatalogNotifier catalog) {
     final booking = _booking;
     return [
-      FieldSpec(
-        name: 'clientId',
-        label: 'Клиент',
-        type: FieldType.dropdown,
-        initialValue: booking?.clientId,
-        options: [
-          for (final client in catalog.clients)
-            DropdownEntry(client.id, '${client.name} — ${client.email}'),
-        ],
-        validators: [V.notNull('Выберите клиента')],
-      ),
+      if (!widget.selfService)
+        FieldSpec(
+          name: 'clientId',
+          serverError: _serverErrors['clientId'],
+          label: 'Клиент',
+          type: FieldType.dropdown,
+          initialValue: booking?.clientId,
+          options: [
+            for (final client in catalog.clients)
+              DropdownEntry(client.id, '${client.name} — ${client.email}'),
+          ],
+          validators: [V.notNull('Выберите клиента')],
+        ),
       FieldSpec(
         name: 'email',
+        serverError: _serverErrors['email'],
         label: 'Почта для связи',
         type: FieldType.email,
-        initialValue: booking?.email,
-        validators: [V.required(), V.email()],
+        initialValue: booking?.email ??
+            (widget.selfService
+                ? context.read<SessionStore>().user?.email
+                : null),
+        validators: [V.required(), V.length(max: 254), V.email()],
         width: 320,
       ),
       FieldSpec(
         name: 'hallId',
+        serverError: _serverErrors['hallId'],
         label: 'Зал студии',
         type: FieldType.dropdown,
         initialValue: _selectedHallId,
@@ -89,6 +116,7 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       ),
       FieldSpec(
         name: 'photographerIds',
+        serverError: _serverErrors['photographerIds'],
         label: 'Фотографы',
         type: FieldType.multiselect,
         initialValue: booking?.photographerIds ?? const [],
@@ -106,26 +134,33 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       ),
       FieldSpec(
         name: 'date',
+        serverError: _serverErrors['date'],
         label: 'Дата съёмки (ГГГГ-ММ-ДД)',
         type: FieldType.date,
         initialValue: booking == null
             ? _dateText(DateTime.now().add(const Duration(days: 1)))
             : _dateText(booking.date),
-        validators: [V.notPast()],
+        validators: [
+          (value) => booking != null && value == _dateText(booking.date)
+              ? V.date()(value)
+              : V.notPast()(value)
+        ],
         width: 300,
       ),
-      FieldSpec(
-        name: 'accessCode',
-        label: 'Код бронирования',
-        type: FieldType.text,
-        initialValue: booking?.accessCode,
-        hint: 'Латиница, цифры и дефис, не короче 6 символов',
-        validators: [V.required(), V.accessCode()],
-        serverError: _serverErrors['accessCode'],
-        width: 320,
-      ),
+      if (!widget.selfService)
+        FieldSpec(
+          name: 'accessCode',
+          serverError: _serverErrors['accessCode'],
+          label: 'Код бронирования',
+          type: FieldType.text,
+          initialValue: booking?.accessCode,
+          hint: 'Латиница, цифры и дефис, не короче 6 символов',
+          validators: [V.required(), V.accessCode()],
+          width: 320,
+        ),
       FieldSpec(
         name: 'durationHours',
+        serverError: _serverErrors['durationHours'],
         label: 'Длительность, ч',
         type: FieldType.number,
         initialValue: booking?.durationHours ?? 2,
@@ -134,6 +169,7 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       ),
       FieldSpec(
         name: 'participants',
+        serverError: _serverErrors['participants'],
         label: 'Участников',
         type: FieldType.number,
         initialValue: booking?.participants ?? 1,
@@ -142,6 +178,7 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       ),
       FieldSpec(
         name: 'shootingType',
+        serverError: _serverErrors['shootingType'],
         label: 'Тип съёмки',
         type: FieldType.text,
         initialValue: booking?.shootingType ?? 'Портретная',
@@ -150,6 +187,7 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
       ),
       FieldSpec(
         name: 'comment',
+        serverError: _serverErrors['comment'],
         label: 'Комментарий',
         type: FieldType.multiline,
         initialValue: booking?.comment ?? '',
@@ -196,7 +234,9 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     final form = _entityFormKey.currentState;
     if (form == null) return;
     final catalog = context.read<CatalogNotifier>();
-    final clientId = form.number('clientId');
+    final self = widget.selfService ? context.read<SessionStore>().user : null;
+    final clientId =
+        widget.selfService ? (self?.clientId ?? 0) : form.number('clientId');
     final client =
         catalog.clients.where((item) => item.id == clientId).firstOrNull;
     if (_saving) return;
@@ -209,7 +249,7 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
     try {
       await context.read<BookingRepository>().save(Booking(
             id: _booking?.id ?? 0,
-            clientName: client?.name ?? 'Клиент #$clientId',
+            clientName: self?.fullName ?? client?.name ?? 'Клиент #$clientId',
             clientId: clientId,
             email: form.string('email'),
             accessCode: form.string('accessCode'),
@@ -220,11 +260,12 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
             participants: form.number('participants'),
             shootingType: form.string('shootingType'),
             comment: form.string('comment'),
+            status: _booking?.status ?? 'active',
             deletedAt: _booking?.deletedAt,
           ));
       _dirty = false;
       await catalog.load(force: true);
-      if (mounted) context.go('/bookings');
+      if (mounted) context.go(_returnPath);
     } on Object catch (error) {
       if (!mounted) return;
       final outcome = toFormOutcome(error);
@@ -247,38 +288,43 @@ class _BookingFormScreenState extends State<BookingFormScreen> {
   String _dateText(DateTime date) =>
       '${date.year}-${date.month.toString().padLeft(2, '0')}-${date.day.toString().padLeft(2, '0')}';
   void _cancel() {
-    _dirty = false;
-    context.go('/bookings');
+    context.go(_returnPath);
   }
 
   @override
   Widget build(BuildContext context) {
     final catalog = context.watch<CatalogNotifier>();
     return DirtyGuard(
-      dirty: _dirty,
+      isDirty: () => _dirty,
+      fallbackLocation: _returnPath,
       message:
           'Есть несохранённые изменения в бронировании. Выйти без сохранения?',
       child: Scaffold(
         appBar: AppBar(
+          leading: BackButton(onPressed: () => context.go(_returnPath)),
           title: Text(widget.isEditing
               ? 'Редактирование бронирования'
               : 'Новое бронирование'),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
-            : EntityForm(
-                key: _entityFormKey,
-                fields: _fields(catalog),
-                formKey: _formKey,
-                saveLabel: widget.isEditing
-                    ? 'Сохранить изменения'
-                    : 'Создать бронирование',
-                saving: _saving,
-                onSubmit: _save,
-                onCancel: _cancel,
-                onChanged: () => _dirty = true,
-                rebuildToken: _revision,
-              ),
+            : _loadError != null
+                ? ErrorView(message: _loadError!, onRetry: _load)
+                : widget.id != null && _booking == null
+                    ? const Center(child: Text('Запись не найдена'))
+                    : EntityForm(
+                        key: _entityFormKey,
+                        fields: _fields(catalog),
+                        formKey: _formKey,
+                        saving: _saving,
+                        saveLabel: widget.isEditing
+                            ? 'Сохранить изменения'
+                            : 'Создать бронирование',
+                        onSubmit: _save,
+                        onCancel: _cancel,
+                        onChanged: () => setState(() => _dirty = true),
+                        rebuildToken: _revision,
+                      ),
       ),
     );
   }

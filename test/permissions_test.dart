@@ -80,9 +80,9 @@ void main() {
   });
 
   group('гость', () {
-    test('получает права клиента', () {
+    test('не получает доступ к внутреннему каталогу', () {
       const permissions = Permissions.guest();
-      expect(permissions.canRead, isTrue);
+      expect(permissions.canRead, isFalse);
       expect(permissions.canCreate, isFalse);
       expect(permissions.isAuthenticated, isFalse);
       expect(permissions.isGuest, isTrue);

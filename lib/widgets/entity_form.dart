@@ -87,13 +87,7 @@ class EntityForm extends StatefulWidget {
   final VoidCallback? onRequestRebuild;
   final Map<String, String?> serverErrors;
   final int rebuildToken;
-
-  /// Идёт ли отправка формы.
-  ///
-  /// Пока форма сохраняется, кнопка заблокирована: повторное нажатие
-  /// не создаст вторую запись.
   final bool saving;
-
   const EntityForm({
     super.key,
     required this.formKey,
@@ -117,6 +111,7 @@ class EntityFormState extends State<EntityForm> {
   final Map<String, TextEditingController> _controllers = {};
   final Map<String, GlobalKey<FormFieldState<Object?>>> _fieldKeys = {};
   final Set<String> _multiselectVisible = {};
+  final Map<String, Object?> _rejectedValues = {};
   @override
   void initState() {
     super.initState();
@@ -208,6 +203,14 @@ class EntityFormState extends State<EntityForm> {
       final controller = _controllers[name];
       if (controller != null) controller.text = value == null ? '' : '$value';
     });
+    _updateFieldState(name, value);
+  }
+
+  void _updateFieldState(String name, Object? value) {
+    final state = _fieldKeys[name]?.currentState;
+    if (state is FormFieldState<List<int>>) {
+      state.didChange(List<int>.from(value as List));
+    }
   }
 
   FieldType fieldType(String name) => widget.fields
@@ -222,6 +225,7 @@ class EntityFormState extends State<EntityForm> {
       }
     });
     widget.onChanged?.call();
+    _updateFieldState(name, value);
     widget.formKey.currentState?.validate();
   }
 
@@ -297,7 +301,8 @@ class EntityFormState extends State<EntityForm> {
       final inline = <FieldSpec>[];
       void flushInline() {
         if (inline.isEmpty) return;
-        result.add(_buildRow(inline));
+        result.add(_buildRow(List<FieldSpec>.of(inline)));
+        result.add(const SizedBox(height: 16));
         inline.clear();
       }
 
@@ -318,35 +323,18 @@ class EntityFormState extends State<EntityForm> {
   }
 
   Widget _buildRow(List<FieldSpec> fields) => LayoutBuilder(
-        builder: (context, constraints) {
-          final widths = <String, double>{};
-          for (final field in fields) {
-            widths[field.name] = field.width ?? 280;
-          }
-          final total = widths.values.fold<double>(0, (a, b) => a + b) +
-              16 * (fields.length - 1);
-          if (fields.length == 1 || constraints.maxWidth < total) {
-            return Column(
-                crossAxisAlignment: CrossAxisAlignment.stretch,
-                children: [
-                  for (var i = 0; i < fields.length; i++) ...[
-                    _buildField(fields[i]),
-                    if (i < fields.length - 1) const SizedBox(height: 16),
-                  ],
-                ]);
-          }
-          return Row(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              for (var i = 0; i < fields.length; i++) ...[
-                SizedBox(
-                    width: widths[fields[i].name],
-                    child: _buildField(fields[i])),
-                if (i < fields.length - 1) const SizedBox(width: 16),
-              ],
-            ],
-          );
-        },
+        builder: (context, constraints) => Wrap(
+          spacing: 16,
+          runSpacing: 16,
+          children: [
+            for (final field in fields)
+              SizedBox(
+                width: (field.width ?? constraints.maxWidth)
+                    .clamp(0.0, constraints.maxWidth),
+                child: _buildField(field),
+              ),
+          ],
+        ),
       );
   Widget _buildField(FieldSpec field) {
     final key = _fieldKeys.putIfAbsent(
@@ -385,7 +373,7 @@ class EntityFormState extends State<EntityForm> {
       final error = validator(value);
       if (error != null) return error;
     }
-    return field.serverError;
+    return _errorOf(field.name);
   }
 
   Widget _textField(FieldSpec field, GlobalKey<FormFieldState<Object?>> key) {
@@ -509,11 +497,23 @@ class EntityFormState extends State<EntityForm> {
     final expanded = _multiselectVisible.contains(field.name) ||
         field.isWideList ||
         _errorOf(field.name) != null;
+
+    // Список доступных значений может быть длинным: показываем его
+    // целиком только по запросу пользователя, иначе поле занимает
+    // весь экран и следующие поля уезжают вниз.
+    final options = field.options;
+    const previewLimit = 8;
+    final visibleOptions =
+        expanded ? options : options.take(previewLimit).toList();
+    final hiddenCount = options.length - visibleOptions.length;
+
+    // Чипы доступных значений рисуются всегда: иначе выбрать ничего
+    // невозможно — а множественный выбор без вариантов не работает.
     final chips = Wrap(
       spacing: 8,
       runSpacing: 8,
       children: [
-        for (final option in field.options)
+        for (final option in visibleOptions)
           FilterChip(
             label: Text(option.label),
             selected: selected.contains(option.value),
@@ -525,8 +525,15 @@ class EntityFormState extends State<EntityForm> {
               _report(field.name, next);
             },
           ),
+        if (hiddenCount > 0)
+          ActionChip(
+            label: Text('ещё $hiddenCount'),
+            onPressed: () =>
+                setState(() => _multiselectVisible.add(field.name)),
+          ),
       ],
     );
+
     return FormField<List<int>>(
       key: key,
       initialValue: selected,
@@ -535,11 +542,13 @@ class EntityFormState extends State<EntityForm> {
           final error = validator(value?.isEmpty ?? true ? '' : 'ok');
           if (error != null) return error;
         }
-        return field.serverError;
+        return _errorOf(field.name);
       },
       builder: (state) => InputDecorator(
         decoration: InputDecoration(
           labelText: field.label,
+          helperText: field.hint,
+          helperMaxLines: 2,
           border: const OutlineInputBorder(),
           errorText: state.errorText ?? _errorOf(field.name),
           errorMaxLines: 2,
@@ -547,38 +556,45 @@ class EntityFormState extends State<EntityForm> {
         isEmpty: selected.isEmpty,
         child: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
+          mainAxisSize: MainAxisSize.min,
           children: [
-            if (selected.isEmpty)
+            // Выбранные значения показываются сверху, чтобы их было видно
+            // при свёрнутом списке вариантов.
+            if (selected.isNotEmpty && !expanded)
+              Padding(
+                padding: const EdgeInsets.only(bottom: 8),
+                child: Wrap(
+                  spacing: 8,
+                  children: [
+                    for (final id in selected.take(4))
+                      Builder(builder: (context) {
+                        final option = field.options
+                            .where((o) => o.value == id)
+                            .firstOrNull;
+                        return InputChip(
+                          label: Text(option?.label ?? '#$id'),
+                          onDeleted: () {
+                            final next = selection(field.name)..remove(id);
+                            _report(field.name, next);
+                          },
+                        );
+                      }),
+                    if (selected.length > 4)
+                      ActionChip(
+                        label: Text('ещё ${selected.length - 4}'),
+                        onPressed: () =>
+                            setState(() => _multiselectVisible.add(field.name)),
+                      ),
+                  ],
+                ),
+              ),
+            chips,
+            if (options.isEmpty)
               Padding(
                 padding: const EdgeInsets.symmetric(vertical: 6),
-                child: Text(field.hint ?? 'Ничего не выбрано',
+                child: Text('Нет доступных значений',
                     style: TextStyle(
                         color: Theme.of(context).hintColor, fontSize: 13)),
-              )
-            else if (expanded || field.isWideList)
-              chips
-            else
-              Wrap(
-                spacing: 8,
-                children: [
-                  ...selected.take(4).map((id) {
-                    final option =
-                        field.options.where((o) => o.value == id).firstOrNull;
-                    return InputChip(
-                      label: Text(option?.label ?? '#$id'),
-                      onDeleted: () {
-                        final next = selection(field.name)..remove(id);
-                        _report(field.name, next);
-                      },
-                    );
-                  }),
-                  if (selected.length > 4)
-                    ActionChip(
-                      label: Text('ещё ${selected.length - 4}'),
-                      onPressed: () =>
-                          setState(() => _multiselectVisible.add(field.name)),
-                    ),
-                ],
               ),
           ],
         ),
@@ -592,10 +608,17 @@ class EntityFormState extends State<EntityForm> {
         value: _values[field.name] == true,
         onChanged: (value) => _report(field.name, value),
       );
+  void rejectValue(String name) {
+    _rejectedValues[name] = text(name);
+  }
+
   String? _errorOf(String name) {
     for (final field in widget.fields) {
-      if (field.name == name) return field.serverError;
+      if (field.name != name || field.serverError == null) continue;
+      _rejectedValues.putIfAbsent(name, () => text(name));
+      return _rejectedValues[name] == text(name) ? field.serverError : null;
     }
+    _rejectedValues.remove(name);
     return null;
   }
 }

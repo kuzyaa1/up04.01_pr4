@@ -254,7 +254,7 @@ const seedPhotographers = <Photographer>[
       specialization: 'Портрет',
       experienceYears: 7,
       hourlyRate: 4500,
-      hallIds: [1, 2],
+      hallIds: [1, 2, 10],
       bookingIds: [1, 6]),
   Photographer(
       id: 2,
@@ -263,7 +263,7 @@ const seedPhotographers = <Photographer>[
       specialization: 'Fashion',
       experienceYears: 9,
       hourlyRate: 6000,
-      hallIds: [2, 9],
+      hallIds: [2, 9, 13],
       bookingIds: [2, 9]),
   Photographer(
       id: 3,
@@ -326,7 +326,7 @@ const seedPhotographers = <Photographer>[
       specialization: 'Контент для брендов',
       experienceYears: 5,
       hourlyRate: 4300,
-      hallIds: [4, 7],
+      hallIds: [4, 7, 8],
       bookingIds: [5, 10]),
   Photographer(
       id: 10,
@@ -497,7 +497,7 @@ final seedBookings = <Booking>[
       photographerIds: [1, 8],
       date: _d(2026, 5, 5),
       durationHours: 6,
-      participants: 8,
+      participants: 4,
       shootingType: 'Fashion',
       comment: ''),
   Booking(
@@ -536,7 +536,7 @@ final seedBookings = <Booking>[
       photographerIds: [2, 10],
       date: _d(2026, 6, 3),
       durationHours: 4,
-      participants: 5,
+      participants: 4,
       shootingType: 'Fashion',
       comment: ''),
   Booking(

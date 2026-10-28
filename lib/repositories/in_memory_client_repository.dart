@@ -1,18 +1,14 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import '../core/errors.dart';
 import '../data/seed_data.dart';
 import '../models/client.dart';
 import '../models/client_query.dart';
 import '../models/page_result.dart';
-import 'client_repository.dart';
 import 'in_memory_repository.dart';
 
-/// Реализация [ClientRepository] на данных в памяти.
-///
-/// Оставлена после ПР4: на ней написаны модульные тесты из ПР3,
-/// и она показывает, что интерфейс репозитория не изменился.
+import 'client_repository.dart';
+
 class ClientRepositoryImpl extends InMemoryRepository<Client>
     implements ClientRepository {
   ClientRepositoryImpl(SharedPreferences prefs)
@@ -23,26 +19,19 @@ class ClientRepositoryImpl extends InMemoryRepository<Client>
           encode: (client) => client.toJson(),
           seed: seedClients.map((client) => client.toJson()).toList(),
         );
-
   @override
   int rowId(Client item) => item.id;
-
   @override
   bool rowDeleted(Client item) => item.isDeleted;
-
   @override
   Map<String, dynamic> rowJson(Client item) => item.toJson();
-
   @override
   Client rowWithDeletedAt(Client item, DateTime? deletedAt) => deletedAt == null
       ? item.copyWith(clearDeletedAt: true)
       : item.copyWith(deletedAt: deletedAt);
-
   @override
-  Future<PageResult<Client>> find(
-    ClientQuery query, {
-    CancelToken? cancelToken,
-  }) async {
+  Future<PageResult<Client>> find(ClientQuery query,
+      {CancelToken? cancelToken}) async {
     if (query.yearFrom != null &&
         query.yearTo != null &&
         query.yearFrom! > query.yearTo!) {
@@ -103,6 +92,7 @@ class ClientRepositoryImpl extends InMemoryRepository<Client>
 
   @override
   Future<Client> save(Client client) async {
+    await saveGuard?.call(client);
     final email = client.email.trim().toLowerCase();
     final emailTaken = items.any((x) =>
         x.id != client.id &&
@@ -162,24 +152,28 @@ class ClientRepositoryImpl extends InMemoryRepository<Client>
 
   @override
   Future<void> softDelete(int id) async {
+    await checkDeletion([id]);
     markDeleted(id);
     await persist();
   }
 
   @override
   Future<void> hardDelete(int id) async {
+    await checkDeletion([id], hard: true);
     remove(id);
     await persist();
   }
 
   @override
   Future<void> restore(int id) async {
-    markRestored(id);
-    await persist();
+    final item = await findById(id);
+    if (item == null) throw StateError('Запись #$id не найдена');
+    await save(rowWithDeletedAt(item, null));
   }
 
   @override
   Future<int> softDeleteMany(List<int> ids) async {
+    await checkDeletion(ids);
     var count = 0;
     for (final id in ids) {
       final exists = items.any((x) => x.id == id && !x.isDeleted);
@@ -193,6 +187,7 @@ class ClientRepositoryImpl extends InMemoryRepository<Client>
 
   @override
   Future<int> hardDeleteMany(List<int> ids) async {
+    await checkDeletion(ids, hard: true);
     final before = items.length;
     for (final id in ids) {
       remove(id);

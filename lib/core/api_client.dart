@@ -16,7 +16,10 @@ typedef TokenProvider = String? Function();
 ///
 /// Общие настройки и интерсепторы вынесены сюда, чтобы репозитории
 /// занимались только предметной областью.
-Dio buildDio({TokenProvider? tokenProvider}) {
+Dio buildDio(
+    {TokenProvider? tokenProvider,
+    Future<bool> Function()? refreshTokens,
+    Future<void> Function()? onSessionExpired}) {
   final dio = Dio(
     BaseOptions(
       baseUrl: apiBaseUrl,
@@ -63,12 +66,36 @@ Dio buildDio({TokenProvider? tokenProvider}) {
         }
         return handler.next(response);
       },
-      onError: (error, handler) {
+      onError: (error, handler) async {
+        final request = error.requestOptions;
+        final isAuth = request.path.startsWith('/auth/');
+        if (error.response?.statusCode == 401 &&
+            !isAuth &&
+            refreshTokens != null) {
+          if (request.extra['authRetried'] == true) {
+            await onSessionExpired?.call();
+          } else {
+            final current = tokenProvider?.call();
+            final alreadyRefreshed = current != null &&
+                request.headers['Authorization'] != 'Bearer $current';
+            if (alreadyRefreshed || await refreshTokens()) {
+              request.extra['authRetried'] = true;
+              request.headers['Authorization'] =
+                  'Bearer ${tokenProvider?.call()}';
+              try {
+                final response = await dio.fetch<dynamic>(request);
+                return handler.resolve(response);
+              } on DioException catch (retryError) {
+                return handler.next(retryError);
+              }
+            }
+          }
+        }
         // Сюда приходят сетевые сбои, таймауты, коды 5xx
         // и всё, что отклонил обработчик выше.
         if (kDebugMode) {
           debugPrint(
-            '[API] сбой ${error.requestOptions.uri}: ${error.type}',
+            '[API] ${error.requestOptions.method} ${error.requestOptions.uri} → ${error.response?.statusCode ?? 'нет ответа'}: ${error.type}',
           );
         }
         return handler.next(error);

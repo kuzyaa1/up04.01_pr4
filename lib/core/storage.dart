@@ -20,7 +20,7 @@ class VersionedStore {
     required Map<String, dynamic> Function(Map<String, dynamic> json) migrate,
     required List<Map<String, dynamic>> seed,
   }) {
-    final current = prefs.getString(key(name, currentVersion));
+    final current = _raw(prefs, key(name, currentVersion));
     if (current != null) {
       final parsed = _decodeList(current, parse);
       if (parsed != null) return StoreReadResult(parsed, false);
@@ -30,11 +30,13 @@ class VersionedStore {
     }
     for (var version = currentVersion - 1; version >= 1; version--) {
       final oldKey = key(name, version);
-      final old = prefs.getString(oldKey);
+      final old = _raw(prefs, oldKey);
       if (old == null) continue;
       try {
         final raw = _decodeList(old, (json) => json);
         if (raw == null) {
+          _notify(prefs,
+              'Старые данные «$name» повреждены, восстановлен начальный набор');
           prefs.remove(oldKey);
           continue;
         }
@@ -45,6 +47,8 @@ class VersionedStore {
             'Данные «$name» обновлены с версии $version до версии $currentVersion');
         return StoreReadResult(migrated.map(parse).toList(), true);
       } catch (_) {
+        _notify(prefs,
+            'Старые данные «$name» повреждены, восстановлен начальный набор');
         prefs.remove(oldKey);
       }
     }
@@ -52,17 +56,25 @@ class VersionedStore {
     return StoreReadResult(seed, true);
   }
 
+  static String? _raw(SharedPreferences prefs, String key) {
+    final value = prefs.get(key);
+    return value == null
+        ? null
+        : value is String
+            ? value
+            : 'invalid storage type';
+  }
+
   static Future<void> write(SharedPreferences prefs, String name,
       List<Map<String, dynamic>> items) async {
-    try {
-      await prefs.setString(key(name, currentVersion), jsonEncode(items));
-    } catch (_) {}
+    final saved =
+        await prefs.setString(key(name, currentVersion), jsonEncode(items));
+    if (!saved) throw StateError('Не удалось сохранить данные в браузере');
   }
 
   static void writeSync(
       SharedPreferences prefs, String name, List<Map<String, dynamic>> items) {
     try {
-      // ignore: discarded_futures
       prefs.setString(key(name, currentVersion), jsonEncode(items));
     } catch (_) {}
   }
@@ -91,7 +103,8 @@ class VersionedStore {
 
   static void _notify(SharedPreferences prefs, String text) {
     try {
-      prefs.setString(noticeKey, text);
+      final previous = prefs.getString(noticeKey);
+      prefs.setString(noticeKey, previous == null ? text : '$previous\n$text');
     } catch (_) {}
   }
 }

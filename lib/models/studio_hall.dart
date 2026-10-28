@@ -3,9 +3,9 @@ class StudioHall {
   final String name;
   final String code;
   final String style;
+  final String description;
   final int capacity;
   final int hourlyRate;
-  final String description;
   final List<int> equipmentIds;
   final List<int> bookingIds;
   final DateTime? deletedAt;
@@ -27,9 +27,9 @@ class StudioHall {
         'name': name,
         'code': code,
         'style': style,
+        'description': description,
         'capacity': capacity,
         'hourlyRate': hourlyRate,
-        'description': description,
         'equipmentIds': equipmentIds,
         'bookingIds': bookingIds,
         'deletedAt': deletedAt?.toIso8601String(),
@@ -39,9 +39,9 @@ class StudioHall {
         name: _asString(json['name']),
         code: _asString(json['code']),
         style: _asString(json['style']),
+        description: _asString(json['description']),
         capacity: _asInt(json['capacity']),
         hourlyRate: _asInt(json['hourlyRate']),
-        description: _asString(json['description']),
         equipmentIds: _asIntList(json['equipmentIds']),
         bookingIds: _asIntList(json['bookingIds']),
         deletedAt: _asDate(json['deletedAt']),
@@ -50,9 +50,9 @@ class StudioHall {
           {String? name,
           String? code,
           String? style,
+          String? description,
           int? capacity,
           int? hourlyRate,
-          String? description,
           List<int>? equipmentIds,
           List<int>? bookingIds,
           DateTime? deletedAt,
@@ -62,9 +62,9 @@ class StudioHall {
         name: name ?? this.name,
         code: code ?? this.code,
         style: style ?? this.style,
+        description: description ?? this.description,
         capacity: capacity ?? this.capacity,
         hourlyRate: hourlyRate ?? this.hourlyRate,
-        description: description ?? this.description,
         equipmentIds: equipmentIds ?? this.equipmentIds,
         bookingIds: bookingIds ?? this.bookingIds,
         deletedAt: clearDeletedAt ? null : (deletedAt ?? this.deletedAt),

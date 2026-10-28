@@ -84,6 +84,17 @@ class PersistentBookingRepository extends InMemoryRepository<Booking>
   }
 
   @override
+  Future<void> persist() async {
+    await super.persist();
+    final halls = _halls;
+    final photographers = _photographers;
+    if (halls is InMemoryHallRepository) await halls.persist();
+    if (photographers is InMemoryPhotographerRepository) {
+      await photographers.persist();
+    }
+  }
+
+  @override
   int rowId(Booking item) => item.id;
   @override
   bool rowDeleted(Booking item) => item.isDeleted;
@@ -95,10 +106,8 @@ class PersistentBookingRepository extends InMemoryRepository<Booking>
           ? item.copyWith(clearDeletedAt: true)
           : item.copyWith(deletedAt: deletedAt);
   @override
-  Future<PageResult<Booking>> find(
-    BookingQuery query, {
-    CancelToken? cancelToken,
-  }) async {
+  Future<PageResult<Booking>> find(BookingQuery query,
+      {CancelToken? cancelToken}) async {
     if (query.participantsFrom != null &&
         query.participantsTo != null &&
         query.participantsFrom! > query.participantsTo!) {
@@ -192,6 +201,7 @@ class PersistentBookingRepository extends InMemoryRepository<Booking>
 
   @override
   Future<Booking> save(Booking booking) async {
+    await saveGuard?.call(booking);
     final code = booking.accessCode.trim().toUpperCase();
     final duplicate = items.any((x) =>
         x.id != booking.id &&
@@ -228,24 +238,28 @@ class PersistentBookingRepository extends InMemoryRepository<Booking>
 
   @override
   Future<void> softDelete(int id) async {
+    await checkDeletion([id]);
     markDeleted(id);
     await persist();
   }
 
   @override
   Future<void> hardDelete(int id) async {
+    await checkDeletion([id], hard: true);
     remove(id);
     await persist();
   }
 
   @override
   Future<void> restore(int id) async {
-    markRestored(id);
-    await persist();
+    final item = await findById(id);
+    if (item == null) throw StateError('Запись #$id не найдена');
+    await save(rowWithDeletedAt(item, null));
   }
 
   @override
   Future<int> softDeleteMany(List<int> ids) async {
+    await checkDeletion(ids);
     var count = 0;
     for (final id in ids) {
       final exists = items.any((x) => x.id == id && !x.isDeleted);
@@ -259,6 +273,7 @@ class PersistentBookingRepository extends InMemoryRepository<Booking>
 
   @override
   Future<int> hardDeleteMany(List<int> ids) async {
+    await checkDeletion(ids, hard: true);
     final before = items.length;
     for (final id in ids) {
       remove(id);

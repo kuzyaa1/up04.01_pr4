@@ -75,7 +75,21 @@ class Permissions {
   bool get isAuthenticated => !isGuest;
 
   /// Можно читать каталог. Гость тоже может.
-  bool get canRead => true;
+  bool get canRead => isAuthenticated;
+
+  bool get canUseClientPortal => isAuthenticated && role == UserRole.client;
+  bool get canUseManagerWorkspace =>
+      isAuthenticated && role == UserRole.manager;
+  bool get canViewStatistics => isAuthenticated && role == UserRole.admin;
+  bool get canManageClients => isAuthenticated && role.canManage;
+  bool get canBookOwn => canUseClientPortal;
+  bool canManageEntity(String collection) =>
+      isAuthenticated &&
+      (role == UserRole.admin ||
+          (role == UserRole.manager &&
+              const ['clients', 'bookings'].contains(collection)));
+  bool canCreateEntity(String collection) =>
+      canManageEntity(collection) || (collection == 'bookings' && canBookOwn);
 
   /// Можно создавать записи.
   bool get canCreate => role.canManage;
@@ -107,12 +121,16 @@ class Permissions {
   /// Человекочитаемое описание прав для главной страницы.
   List<String> get summary => [
         'Просмотр каталога студии',
-        if (canCreate) 'Создание и изменение записей',
+        if (canBookOwn) 'Бронирование залов для себя и продление своих записей',
+        if (role == UserRole.manager) 'Управление клиентами и бронированиями',
+        if (role == UserRole.admin) 'Управление всеми записями и справочниками',
+        if (canManageUsers) 'Управление пользователями и ролями',
+        if (canViewStatistics) 'Просмотр статистики',
         if (canSoftDelete) 'Логическое удаление',
         if (canBulkDelete) 'Множественное удаление',
         if (canRestore) 'Восстановление удалённых записей',
         if (canHardDelete) 'Физическое удаление',
-        if (!canManage)
+        if (!canManage && !canBookOwn)
           isAuthenticated
               ? 'Изменение данных запрещено ролью «${role.title}»'
               : 'Изменение данных доступно после входа',

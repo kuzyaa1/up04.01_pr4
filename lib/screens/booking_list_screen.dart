@@ -83,6 +83,11 @@ class _BookingListScreenState extends State<BookingListScreen> {
         padding: const EdgeInsets.fromLTRB(12, 12, 12, 0),
         child: Align(
           alignment: Alignment.centerRight,
+          child: CreateButton(
+            collection: 'bookings',
+            label: 'Новое бронирование',
+            onPressed: () => context.go('/bookings/new'),
+          ),
         ),
       );
   Widget _filters(BookingListNotifier notifier, CatalogNotifier catalog) {
@@ -92,8 +97,8 @@ class _BookingListScreenState extends State<BookingListScreen> {
       child: Wrap(spacing: 10, runSpacing: 10, children: [
         SizedBox(
             width: 280,
-            child: TextFormField(
-                initialValue: query.search,
+            child: QueryTextField(
+                value: query.search,
                 decoration: const InputDecoration(
                     labelText: 'Поиск: клиент, код, тип',
                     border: OutlineInputBorder()),
@@ -105,7 +110,9 @@ class _BookingListScreenState extends State<BookingListScreen> {
         SizedBox(
             width: 240,
             child: DropdownButtonFormField<int?>(
-                value: query.hallId,
+                value: catalog.halls.any((h) => h.id == query.hallId)
+                    ? query.hallId
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Зал', border: OutlineInputBorder()),
@@ -120,7 +127,10 @@ class _BookingListScreenState extends State<BookingListScreen> {
         SizedBox(
             width: 260,
             child: DropdownButtonFormField<int?>(
-                value: query.photographerId,
+                value: catalog.photographers
+                        .any((p) => p.id == query.photographerId)
+                    ? query.photographerId
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Фотограф', border: OutlineInputBorder()),
@@ -137,7 +147,9 @@ class _BookingListScreenState extends State<BookingListScreen> {
         SizedBox(
             width: 230,
             child: DropdownButtonFormField<String?>(
-                value: query.shootingType,
+                value: catalog.shootingTypes.contains(query.shootingType)
+                    ? query.shootingType
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Тип съёмки', border: OutlineInputBorder()),
@@ -178,8 +190,8 @@ class _BookingListScreenState extends State<BookingListScreen> {
   Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
       SizedBox(
           width: 150,
-          child: TextFormField(
-              initialValue: value?.toString(),
+          child: QueryTextField(
+              value: value?.toString(),
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                   labelText: label, border: OutlineInputBorder()),
@@ -188,8 +200,8 @@ class _BookingListScreenState extends State<BookingListScreen> {
           String label, String? value, ValueChanged<String?> onChanged) =>
       SizedBox(
           width: 170,
-          child: TextFormField(
-              initialValue: value,
+          child: QueryTextField(
+              value: value,
               decoration: InputDecoration(
                   labelText: label, border: OutlineInputBorder()),
               onFieldSubmitted: (text) =>
@@ -197,6 +209,7 @@ class _BookingListScreenState extends State<BookingListScreen> {
   Widget _selection(BookingListNotifier notifier) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: BulkActions(
+          collection: 'bookings',
           count: notifier.selected.length,
           onDelete: () async {
             if (await confirm(context, 'Удалить выбранные бронирования?')) {
@@ -285,6 +298,9 @@ class _BookingListScreenState extends State<BookingListScreen> {
       );
   List<Widget> _actions(Booking item, CatalogNotifier catalog) {
     final buttons = RecordActions.buttons(
+      collection: 'bookings',
+      context: context,
+      onView: () => context.go('/bookings/${item.id}'),
       permissions: context.watch<SessionStore>().permissions,
       onEdit: () => context.go('/bookings/${item.id}/edit'),
       isDeleted: item.isDeleted,
@@ -293,7 +309,10 @@ class _BookingListScreenState extends State<BookingListScreen> {
       onHardDelete: () => _delete(item, hard: true),
     );
 
-    if (item.isDeleted) return buttons;
+    if (item.isDeleted ||
+        !context.watch<SessionStore>().permissions.canUpdate) {
+      return buttons;
+    }
 
     // Отменить бронирование можно только пока оно активное.
     if (item.status == 'active') {

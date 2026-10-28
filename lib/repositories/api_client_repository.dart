@@ -4,7 +4,7 @@ import '../models/client_query.dart';
 import 'api_repository.dart';
 import 'client_repository.dart';
 
-/// Реализация [ClientRepository] поверх REST API.
+// Реализация [ClientRepository] поверх REST API.
 class ApiClientRepository extends ApiRepository<Client, ClientQuery>
     implements ClientRepository {
   ApiClientRepository(super.dio);
@@ -29,7 +29,7 @@ class ApiClientRepository extends ApiRepository<Client, ClientQuery>
       cardNumber: parseString(cardData['number']),
       cardIssuedAt: parseString(cardData['issuedAt']),
       cardExpiresAt: parseString(cardData['expiresAt']),
-      notes: '',
+      notes: parseString(json['notes']),
       deletedAt: parseDate(json['deletedAt']),
     );
   }
@@ -37,6 +37,7 @@ class ApiClientRepository extends ApiRepository<Client, ClientQuery>
   @override
   Map<String, dynamic> toRequestBody(Client client) => {
         'fullName': client.name.trim(),
+        'notes': client.notes.trim(),
         'email': client.email.trim(),
         'phone': client.phone.trim(),
         'clientType': client.clientType,

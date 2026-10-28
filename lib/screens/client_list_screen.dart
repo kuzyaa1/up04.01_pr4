@@ -5,7 +5,6 @@ import 'package:provider/provider.dart';
 import '../models/client.dart';
 import '../models/client_query.dart';
 import '../repositories/client_repository.dart';
-import '../repositories/booking_repository.dart';
 import '../state/catalog_notifier.dart';
 import '../state/catalog_notifiers.dart';
 import '../state/session.dart';
@@ -84,6 +83,7 @@ class _ClientListScreenState extends State<ClientListScreen> {
           child: Align(
             alignment: Alignment.centerRight,
             child: CreateButton(
+                collection: 'clients',
                 label: 'Новый клиент',
                 onPressed: () => context.go('/clients/new')),
           ),
@@ -111,8 +111,8 @@ class _ClientListScreenState extends State<ClientListScreen> {
       child: Wrap(spacing: 10, runSpacing: 10, children: [
         SizedBox(
             width: 300,
-            child: TextFormField(
-                initialValue: query.search,
+            child: QueryTextField(
+                value: query.search,
                 decoration: const InputDecoration(
                     labelText: 'Поиск: имя, телефон, абонемент',
                     border: OutlineInputBorder()),
@@ -136,7 +136,9 @@ class _ClientListScreenState extends State<ClientListScreen> {
         SizedBox(
             width: 220,
             child: DropdownButtonFormField<String?>(
-                value: query.clientType,
+                value: _clientTypes.contains(query.clientType)
+                    ? query.clientType
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Тип клиента', border: OutlineInputBorder()),
@@ -172,8 +174,8 @@ class _ClientListScreenState extends State<ClientListScreen> {
   Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
       SizedBox(
           width: 140,
-          child: TextFormField(
-              initialValue: value?.toString(),
+          child: QueryTextField(
+              value: value?.toString(),
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                   labelText: label, border: OutlineInputBorder()),
@@ -181,6 +183,7 @@ class _ClientListScreenState extends State<ClientListScreen> {
   Widget _selection(ClientListNotifier notifier) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: BulkActions(
+          collection: 'clients',
           count: notifier.selected.length,
           onDelete: () async {
             if (await confirm(context, 'Удалить выбранных клиентов?')) {
@@ -265,6 +268,9 @@ class _ClientListScreenState extends State<ClientListScreen> {
         ),
       );
   List<Widget> _actions(Client item) => RecordActions.buttons(
+        collection: 'clients',
+        context: context,
+        onView: () => context.go('/clients/${item.id}'),
         permissions: context.watch<SessionStore>().permissions,
         onEdit: () => context.go('/clients/${item.id}/edit'),
         isDeleted: item.isDeleted,
@@ -273,16 +279,8 @@ class _ClientListScreenState extends State<ClientListScreen> {
         onHardDelete: () => _delete(item, hard: true),
       );
   Future<void> _delete(Client item, {required bool hard}) async {
-    final bookings = context.read<BookingRepository>();
     final clients = context.read<ClientListNotifier>();
     final catalog = context.read<CatalogNotifier>();
-    final linked = await bookings.countForClient(item.id);
-    if (linked > 0) {
-      if (!mounted) return;
-      toast(context,
-          'Нельзя удалить клиента «${item.name}»: связанных бронирований — $linked');
-      return;
-    }
     if (!mounted) return;
     if (await confirm(
         context,

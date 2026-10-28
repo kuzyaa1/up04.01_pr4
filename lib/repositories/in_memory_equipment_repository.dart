@@ -1,18 +1,14 @@
 import 'package:dio/dio.dart';
 import 'package:shared_preferences/shared_preferences.dart';
-
 import '../core/errors.dart';
 import '../data/seed_data.dart';
 import '../models/equipment.dart';
 import '../models/equipment_query.dart';
 import '../models/page_result.dart';
-import 'equipment_repository.dart';
 import 'in_memory_repository.dart';
 
-/// Реализация [EquipmentRepository] на данных в памяти.
-///
-/// Оставлена после ПР4: на ней написаны модульные тесты из ПР3,
-/// и она показывает, что интерфейс репозитория не изменился.
+import 'equipment_repository.dart';
+
 class EquipmentRepositoryImpl extends InMemoryRepository<Equipment>
     implements EquipmentRepository {
   EquipmentRepositoryImpl(SharedPreferences prefs)
@@ -23,27 +19,20 @@ class EquipmentRepositoryImpl extends InMemoryRepository<Equipment>
           encode: (equipment) => equipment.toJson(),
           seed: seedEquipment.map((item) => item.toJson()).toList(),
         );
-
   @override
   int rowId(Equipment item) => item.id;
-
   @override
   bool rowDeleted(Equipment item) => item.isDeleted;
-
   @override
   Map<String, dynamic> rowJson(Equipment item) => item.toJson();
-
   @override
   Equipment rowWithDeletedAt(Equipment item, DateTime? deletedAt) =>
       deletedAt == null
           ? item.copyWith(clearDeletedAt: true)
           : item.copyWith(deletedAt: deletedAt);
-
   @override
-  Future<PageResult<Equipment>> find(
-    EquipmentQuery query, {
-    CancelToken? cancelToken,
-  }) async {
+  Future<PageResult<Equipment>> find(EquipmentQuery query,
+      {CancelToken? cancelToken}) async {
     if (query.quantityFrom != null &&
         query.quantityTo != null &&
         query.quantityFrom! > query.quantityTo!) {
@@ -69,7 +58,7 @@ class EquipmentRepositoryImpl extends InMemoryRepository<Equipment>
                   x.manufacturer.toLowerCase().contains(search))
               .toList();
         }
-        if (query.category != null && query.category!.isNotEmpty) {
+        if (query.category != null) {
           result = result.where((x) => x.category == query.category).toList();
         }
         if (query.hallId != null) {
@@ -108,6 +97,7 @@ class EquipmentRepositoryImpl extends InMemoryRepository<Equipment>
 
   @override
   Future<Equipment> save(Equipment equipment) async {
+    await saveGuard?.call(equipment);
     final name = equipment.name.trim().toLowerCase();
     final duplicate = items.any((x) =>
         x.id != equipment.id &&
@@ -138,24 +128,28 @@ class EquipmentRepositoryImpl extends InMemoryRepository<Equipment>
 
   @override
   Future<void> softDelete(int id) async {
+    await checkDeletion([id]);
     markDeleted(id);
     await persist();
   }
 
   @override
   Future<void> hardDelete(int id) async {
+    await checkDeletion([id], hard: true);
     remove(id);
     await persist();
   }
 
   @override
   Future<void> restore(int id) async {
-    markRestored(id);
-    await persist();
+    final item = await findById(id);
+    if (item == null) throw StateError('Запись #$id не найдена');
+    await save(rowWithDeletedAt(item, null));
   }
 
   @override
   Future<int> softDeleteMany(List<int> ids) async {
+    await checkDeletion(ids);
     var count = 0;
     for (final id in ids) {
       final exists = items.any((x) => x.id == id && !x.isDeleted);
@@ -169,6 +163,7 @@ class EquipmentRepositoryImpl extends InMemoryRepository<Equipment>
 
   @override
   Future<int> hardDeleteMany(List<int> ids) async {
+    await checkDeletion(ids, hard: true);
     final before = items.length;
     for (final id in ids) {
       remove(id);

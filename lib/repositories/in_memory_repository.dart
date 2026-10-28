@@ -31,8 +31,18 @@ abstract class InMemoryRepository<T> {
       _items.where((item) => rowId(item) == id).firstOrNull;
   Future<List<T>> all({bool includeDeleted = false}) async => List.unmodifiable(
       _items.where((item) => includeDeleted || !rowDeleted(item)).toList());
-  Future<void> persist() =>
-      VersionedStore.write(_prefs, name, _items.map(rowJson).toList());
+  Future<void> Function(List<int> ids, bool hard)? deletionGuard;
+  Future<void> Function(T item)? saveGuard;
+  Future<void> Function()? afterChange;
+  Future<void> checkDeletion(List<int> ids, {bool hard = false}) async {
+    await deletionGuard?.call(ids, hard);
+  }
+
+  Future<void> persist() async {
+    await VersionedStore.write(_prefs, name, _items.map(rowJson).toList());
+    await afterChange?.call();
+  }
+
   int nextId() =>
       _items.fold<int>(
           0, (maxId, item) => rowId(item) > maxId ? rowId(item) : maxId) +

@@ -4,7 +4,6 @@ import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../models/photographer.dart';
 import '../models/photographer_query.dart';
-import '../repositories/booking_repository.dart';
 import '../state/catalog_notifier.dart';
 import '../state/session.dart';
 import '../state/list_notifier.dart';
@@ -68,6 +67,7 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
           child: Align(
             alignment: Alignment.centerRight,
             child: CreateButton(
+                collection: 'photographers',
                 label: 'Новый фотограф',
                 onPressed: () => context.go('/photographers/new')),
           ),
@@ -95,8 +95,8 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
       child: Wrap(spacing: 10, runSpacing: 10, children: [
         SizedBox(
             width: 280,
-            child: TextFormField(
-                initialValue: query.search,
+            child: QueryTextField(
+                value: query.search,
                 decoration: const InputDecoration(
                     labelText: 'Поиск: фамилия, имя, специализация',
                     border: OutlineInputBorder()),
@@ -108,7 +108,9 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
         SizedBox(
             width: 240,
             child: DropdownButtonFormField<String?>(
-                value: query.specialization,
+                value: catalog.specializations.contains(query.specialization)
+                    ? query.specialization
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Специализация', border: OutlineInputBorder()),
@@ -123,7 +125,9 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
         SizedBox(
             width: 230,
             child: DropdownButtonFormField<int?>(
-                value: query.hallId,
+                value: catalog.halls.any((h) => h.id == query.hallId)
+                    ? query.hallId
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Работает в зале', border: OutlineInputBorder()),
@@ -164,8 +168,8 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
   Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
       SizedBox(
           width: 140,
-          child: TextFormField(
-              initialValue: value?.toString(),
+          child: QueryTextField(
+              value: value?.toString(),
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                   labelText: label, border: OutlineInputBorder()),
@@ -173,6 +177,7 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
   Widget _selection(PhotographerListNotifier notifier) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: BulkActions(
+          collection: 'photographers',
           count: notifier.selected.length,
           onDelete: () async {
             if (await confirm(context, 'Удалить выбранных фотографов?')) {
@@ -263,6 +268,9 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
         ),
       );
   List<Widget> _actions(Photographer item) => RecordActions.buttons(
+        collection: 'photographers',
+        context: context,
+        onView: () => context.go('/photographers/${item.id}'),
         permissions: context.watch<SessionStore>().permissions,
         onEdit: () => context.go('/photographers/${item.id}/edit'),
         isDeleted: item.isDeleted,
@@ -272,16 +280,8 @@ class _PhotographerListScreenState extends State<PhotographerListScreen> {
         onHardDelete: () => _delete(item, hard: true),
       );
   Future<void> _delete(Photographer item, {required bool hard}) async {
-    final bookingRepository = context.read<BookingRepository>();
     final photographers = context.read<PhotographerListNotifier>();
     final catalog = context.read<CatalogNotifier>();
-    final linked = await bookingRepository.countForPhotographer(item.id);
-    if (linked > 0) {
-      if (!mounted) return;
-      toast(context,
-          'Нельзя удалить фотографа «${item.fullName}»: связанных бронирований — $linked');
-      return;
-    }
     if (!mounted) return;
     if (await confirm(
         context,

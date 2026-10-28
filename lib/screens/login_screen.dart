@@ -1,9 +1,9 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import 'package:shared_preferences/shared_preferences.dart';
 
 import '../core/api_exceptions.dart';
+import '../core/router.dart';
 import '../state/session.dart';
 
 /// Экран входа в систему.
@@ -49,22 +49,13 @@ class _LoginScreenState extends State<LoginScreen> {
     });
     try {
       final session = context.read<SessionStore>();
-      final result = await context.read<AuthRepository>().login(
-            _usernameController.text.trim(),
-            _passwordController.text,
-          );
-
-      session.setToken(result.accessToken);
-      session.setRefreshToken(result.refreshToken);
-      session.setUser(result.user);
-
-      final preferences = await SharedPreferences.getInstance();
-      await session.persist(preferences);
+      await session.signIn(context.read<AuthRepository>(),
+          _usernameController.text.trim(), _passwordController.text);
 
       // Справочники могли устареть: у клиента видны только его бронирования.
       if (!mounted) return;
       final from = widget.from;
-      context.go(from != null && from.isNotEmpty ? from : '/bookings');
+      context.go(safeReturnLocation(from));
     } on UnauthorizedException catch (error) {
       if (mounted) setState(() => _error = error.message);
     } on NetworkException catch (error) {
@@ -104,6 +95,10 @@ class _LoginScreenState extends State<LoginScreen> {
                     textAlign: TextAlign.center,
                     style: Theme.of(context).textTheme.bodySmall,
                   ),
+                  if (session.notice != null)
+                    Padding(
+                        padding: const EdgeInsets.only(top: 16),
+                        child: Text(session.notice!)),
                   const SizedBox(height: 28),
                   TextFormField(
                     controller: _usernameController,
@@ -166,6 +161,9 @@ class _LoginScreenState extends State<LoginScreen> {
                           )
                         : const Text('Войти'),
                   ),
+                  TextButton(
+                      onPressed: _busy ? null : () => context.go('/register'),
+                      child: const Text('Создать аккаунт')),
                   const SizedBox(height: 24),
                   if (session.isAuthenticated)
                     OutlinedButton(

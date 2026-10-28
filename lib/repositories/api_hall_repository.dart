@@ -1,3 +1,4 @@
+import '../core/api_exceptions.dart';
 import '../models/hall_query.dart';
 import '../models/studio_hall.dart';
 import 'api_repository.dart';
@@ -26,7 +27,7 @@ class ApiHallRepository extends ApiRepository<StudioHall, HallQuery>
         hourlyRate: _asInt(json['hourlyRate']),
         description: _asString(json['description']),
         equipmentIds: _asIntList(json['equipmentIds']),
-        bookingIds: _asIntList(json['photographerIds']),
+        bookingIds: _asIntList(json['bookingIds']),
         deletedAt: _asDate(json['deletedAt']),
       );
 
@@ -70,8 +71,11 @@ class ApiHallRepository extends ApiRepository<StudioHall, HallQuery>
 
   @override
   Future<int> countBookings(int id) async {
-    final page = await find(HallQuery(size: 1, hallId: id));
-    return page.total;
+    final response = await guard(() => dio.get<Map<String, dynamic>>(
+          '/bookings',
+          queryParameters: {'hallId': id, 'size': 1},
+        ));
+    return _asInt(response.data?['total']);
   }
 
   @override

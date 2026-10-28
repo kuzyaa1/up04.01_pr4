@@ -21,6 +21,7 @@ abstract class ListNotifier<T> extends ChangeNotifier {
   PageResult<T> _result = PageResult.empty();
   final Set<int> _selected = {};
   bool _disposed = false;
+  Future<void> Function()? onMutation;
 
   /// Токен отмены текущего запроса.
   ///
@@ -64,13 +65,20 @@ abstract class ListNotifier<T> extends ChangeNotifier {
     _cancelToken = token;
 
     try {
-      _result = await fetch(token);
+      final result = await fetch(token);
+      if (_disposed || token.isCancelled || !identical(token, _cancelToken)) {
+        return;
+      }
+      _result = result;
       _status = LoadStatus.success;
     } on CancelledException {
       // Запрос отменён: он устарел, потому что пользователь уже изменил
       // условия отбора. Показывать ошибку не нужно — придёт новый ответ.
       return;
     } on Object catch (error) {
+      if (_disposed || token.isCancelled || !identical(token, _cancelToken)) {
+        return;
+      }
       _error = describeError(error);
       _status = LoadStatus.error;
     }

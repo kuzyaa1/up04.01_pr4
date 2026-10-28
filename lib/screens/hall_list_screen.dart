@@ -2,11 +2,8 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-import '../models/equipment_query.dart';
 import '../models/hall_query.dart';
 import '../models/studio_hall.dart';
-import '../repositories/booking_repository.dart';
-import '../repositories/equipment_repository.dart';
 import '../state/catalog_notifier.dart';
 import '../state/session.dart';
 import '../state/list_notifier.dart';
@@ -69,7 +66,9 @@ class _HallListScreenState extends State<HallListScreen> {
           child: Align(
             alignment: Alignment.centerRight,
             child: CreateButton(
-                label: 'Новый зал', onPressed: () => context.go('/halls/new')),
+                collection: 'halls',
+                label: 'Новый зал',
+                onPressed: () => context.go('/halls/new')),
           ),
         ),
         const ReadOnlyNotice(),
@@ -95,8 +94,8 @@ class _HallListScreenState extends State<HallListScreen> {
       child: Wrap(spacing: 10, runSpacing: 10, children: [
         SizedBox(
             width: 280,
-            child: TextFormField(
-                initialValue: query.search,
+            child: QueryTextField(
+                value: query.search,
                 decoration: const InputDecoration(
                     labelText: 'Поиск: название или код',
                     border: OutlineInputBorder()),
@@ -108,7 +107,9 @@ class _HallListScreenState extends State<HallListScreen> {
         SizedBox(
             width: 230,
             child: DropdownButtonFormField<String?>(
-                value: query.style,
+                value: catalog.hallStyles.contains(query.style)
+                    ? query.style
+                    : null,
                 isExpanded: true,
                 decoration: const InputDecoration(
                     labelText: 'Стиль', border: OutlineInputBorder()),
@@ -148,8 +149,8 @@ class _HallListScreenState extends State<HallListScreen> {
   Widget _numberField(String label, int? value, ValueChanged<int?> onChanged) =>
       SizedBox(
           width: 140,
-          child: TextFormField(
-              initialValue: value?.toString(),
+          child: QueryTextField(
+              value: value?.toString(),
               keyboardType: TextInputType.number,
               decoration: InputDecoration(
                   labelText: label, border: OutlineInputBorder()),
@@ -157,6 +158,7 @@ class _HallListScreenState extends State<HallListScreen> {
   Widget _selection(HallListNotifier notifier) => Padding(
         padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 4),
         child: BulkActions(
+          collection: 'halls',
           count: notifier.selected.length,
           onDelete: () async {
             if (await confirm(context, 'Удалить выбранные залы?')) {
@@ -232,6 +234,12 @@ class _HallListScreenState extends State<HallListScreen> {
         ),
       );
   List<Widget> _actions(StudioHall item) => RecordActions.buttons(
+        collection: 'halls',
+        context: context,
+        onBook: context.watch<SessionStore>().permissions.canBookOwn
+            ? () => context.go('/my-bookings/new?hallId=${item.id}')
+            : null,
+        onView: () => context.go('/halls/${item.id}'),
         permissions: context.watch<SessionStore>().permissions,
         onEdit: () => context.go('/halls/${item.id}/edit'),
         isDeleted: item.isDeleted,
@@ -240,26 +248,8 @@ class _HallListScreenState extends State<HallListScreen> {
         onHardDelete: () => _delete(item, hard: true),
       );
   Future<void> _delete(StudioHall item, {required bool hard}) async {
-    final bookingRepository = context.read<BookingRepository>();
-    final equipmentRepository = context.read<EquipmentRepository>();
     final halls = context.read<HallListNotifier>();
     final catalog = context.read<CatalogNotifier>();
-    final bookings = await bookingRepository.countForHall(item.id);
-    final equipment = (await equipmentRepository
-            .find(EquipmentQuery(hallId: item.id, size: 50)))
-        .items
-        .where((row) => !row.isDeleted)
-        .length;
-    if (bookings > 0 || equipment > 0) {
-      if (!mounted) return;
-      final parts = <String>[
-        if (bookings > 0) 'бронирований — $bookings',
-        if (equipment > 0) 'оборудования — $equipment',
-      ];
-      toast(context,
-          'Нельзя удалить зал «${item.name}»: он используется (${parts.join(', ')})');
-      return;
-    }
     if (!mounted) return;
     if (await confirm(context,
         hard ? 'Стереть зал «${item.name}»?' : 'Удалить зал «${item.name}»?',

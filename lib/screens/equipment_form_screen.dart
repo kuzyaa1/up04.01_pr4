@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
 import '../core/form_outcome.dart';
+import '../widgets/state_views.dart';
 import '../core/validators.dart';
 import '../models/equipment.dart';
 import '../repositories/equipment_repository.dart';
@@ -24,8 +25,9 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
   final Map<String, String?> _serverErrors = {};
   List<String> _categories = const [];
   bool _loading = true;
-  bool _dirty = false;
   bool _saving = false;
+  String? _loadError;
+  bool _dirty = false;
   int _revision = 0;
   @override
   void initState() {
@@ -34,20 +36,33 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
   }
 
   Future<void> _load() async {
-    final repository = context.read<EquipmentRepository>();
-    final catalog = context.read<CatalogNotifier>();
-    Equipment? equipment;
-    if (widget.id != null) {
-      equipment = await repository.findById(widget.id!);
-    }
-    await catalog.load();
-    final categories = catalog.equipmentCategories;
-    if (!mounted) return;
     setState(() {
-      _equipment = equipment;
-      _categories = categories;
-      _loading = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      final repository = context.read<EquipmentRepository>();
+      final catalog = context.read<CatalogNotifier>();
+      Equipment? equipment;
+      if (widget.id != null) {
+        equipment = await repository.findById(widget.id!);
+      }
+      await catalog.load();
+      if (catalog.error != null) throw StateError(catalog.error!);
+      final categories = catalog.equipmentCategories;
+      if (!mounted) return;
+      setState(() {
+        _equipment = equipment;
+        _categories = categories;
+        _loading = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   List<FieldSpec> _fields(CatalogNotifier catalog, List<String> categories) {
@@ -56,14 +71,15 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
     return [
       FieldSpec(
         name: 'name',
+        serverError: _serverErrors['name'],
         label: 'Название',
         initialValue: item?.name,
         validators: [V.required(), V.length(min: 2, max: 80)],
-        serverError: _serverErrors['name'],
         width: 340,
       ),
       FieldSpec(
         name: 'category',
+        serverError: _serverErrors['category'],
         label: 'Категория',
         type: hasCategories ? FieldType.dropdownText : FieldType.text,
         initialValue: item?.category,
@@ -77,6 +93,7 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
       ),
       FieldSpec(
         name: 'manufacturer',
+        serverError: _serverErrors['manufacturer'],
         label: 'Производитель',
         initialValue: item?.manufacturer,
         validators: [V.length(max: 60)],
@@ -84,6 +101,7 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
       ),
       FieldSpec(
         name: 'hallId',
+        serverError: _serverErrors['hallId'],
         label: 'Зал',
         type: FieldType.dropdown,
         initialValue: item?.hallId,
@@ -95,6 +113,7 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
       ),
       FieldSpec(
         name: 'quantity',
+        serverError: _serverErrors['quantity'],
         label: 'Количество, шт.',
         type: FieldType.number,
         initialValue: item?.quantity ?? 1,
@@ -103,6 +122,7 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
       ),
       FieldSpec(
         name: 'pricePerDay',
+        serverError: _serverErrors['pricePerDay'],
         label: 'Цена за день, ₽',
         type: FieldType.number,
         initialValue: item?.pricePerDay ?? 0,
@@ -158,7 +178,6 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
   }
 
   void _cancel() {
-    _dirty = false;
     context.go('/equipment');
   }
 
@@ -166,28 +185,35 @@ class _EquipmentFormScreenState extends State<EquipmentFormScreen> {
   Widget build(BuildContext context) {
     final catalog = context.watch<CatalogNotifier>();
     return DirtyGuard(
-      dirty: _dirty,
+      isDirty: () => _dirty,
+      fallbackLocation: '/equipment',
       message: 'Есть несохранённые изменения. Выйти без сохранения?',
       child: Scaffold(
         appBar: AppBar(
+          leading: BackButton(onPressed: () => context.go('/equipment')),
           title: Text(_equipment == null
               ? 'Новое оборудование'
               : 'Редактирование оборудования'),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
-            : EntityForm(
-                key: _entityFormKey,
-                formKey: _formKey,
-                fields: _fields(catalog, _categories),
-                rebuildToken: _revision,
-                saveLabel:
-                    _equipment == null ? 'Создать' : 'Сохранить изменения',
-                saving: _saving,
-                onSubmit: _save,
-                onCancel: _cancel,
-                onChanged: () => _dirty = true,
-              ),
+            : _loadError != null
+                ? ErrorView(message: _loadError!, onRetry: _load)
+                : widget.id != null && _equipment == null
+                    ? const Center(child: Text('Запись не найдена'))
+                    : EntityForm(
+                        key: _entityFormKey,
+                        formKey: _formKey,
+                        saving: _saving,
+                        fields: _fields(catalog, _categories),
+                        rebuildToken: _revision,
+                        saveLabel: _equipment == null
+                            ? 'Создать'
+                            : 'Сохранить изменения',
+                        onSubmit: _save,
+                        onCancel: _cancel,
+                        onChanged: () => setState(() => _dirty = true),
+                      ),
       ),
     );
   }

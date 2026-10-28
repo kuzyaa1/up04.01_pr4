@@ -1,8 +1,8 @@
 import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import 'package:provider/provider.dart';
-
 import '../core/form_outcome.dart';
+import '../widgets/state_views.dart';
 import '../core/validators.dart';
 import '../models/photographer.dart';
 import '../repositories/photographer_repository.dart';
@@ -14,7 +14,6 @@ class PhotographerFormScreen extends StatefulWidget {
   final int? id;
   const PhotographerFormScreen({super.key, this.id});
   bool get isEditing => id != null;
-
   @override
   State<PhotographerFormScreen> createState() => _PhotographerFormScreenState();
 }
@@ -25,10 +24,10 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
   Photographer? _photographer;
   final Map<String, String?> _serverErrors = {};
   bool _loading = true;
-  bool _dirty = false;
   bool _saving = false;
+  String? _loadError;
+  bool _dirty = false;
   int _revision = 0;
-
   @override
   void initState() {
     super.initState();
@@ -36,16 +35,28 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
   }
 
   Future<void> _load() async {
-    Photographer? photographer;
-    if (widget.id != null) {
-      photographer =
-          await context.read<PhotographerRepository>().findById(widget.id!);
-    }
-    if (!mounted) return;
     setState(() {
-      _photographer = photographer;
-      _loading = false;
+      _loading = true;
+      _loadError = null;
     });
+    try {
+      Photographer? photographer;
+      if (widget.id != null) {
+        photographer =
+            await context.read<PhotographerRepository>().findById(widget.id!);
+      }
+      if (!mounted) return;
+      setState(() {
+        _photographer = photographer;
+        _loading = false;
+      });
+    } on Object catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _loadError = error.toString();
+        _loading = false;
+      });
+    }
   }
 
   List<FieldSpec> _fields(CatalogNotifier catalog) {
@@ -53,22 +64,23 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
     return [
       FieldSpec(
         name: 'lastName',
+        serverError: _serverErrors['fullName'],
         label: 'Фамилия',
         initialValue: item?.lastName,
         validators: [V.required(), V.length(min: 2, max: 50)],
-        serverError: _serverErrors['lastName'],
         width: 300,
       ),
       FieldSpec(
         name: 'firstName',
+        serverError: _serverErrors['firstName'],
         label: 'Имя',
         initialValue: item?.firstName,
         validators: [V.required(), V.length(min: 2, max: 50)],
-        serverError: _serverErrors['firstName'],
         width: 300,
       ),
       FieldSpec(
         name: 'specialization',
+        serverError: _serverErrors['specialization'],
         label: 'Специализация',
         type: catalog.specializations.isEmpty
             ? FieldType.text
@@ -80,29 +92,29 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
             TextDropdownEntry(text, text),
         ],
         validators: [V.required(), V.length(min: 3, max: 40)],
-        serverError: _serverErrors['specialization'],
         width: 300,
       ),
       FieldSpec(
         name: 'experienceYears',
+        serverError: _serverErrors['experienceYears'],
         label: 'Стаж, лет',
         type: FieldType.number,
         initialValue: item?.experienceYears ?? 1,
         validators: [V.integer(min: 0, max: 60, label: 'Стаж')],
-        serverError: _serverErrors['experienceYears'],
         width: 200,
       ),
       FieldSpec(
         name: 'hourlyRate',
+        serverError: _serverErrors['hourlyRate'],
         label: 'Ставка, ₽/час',
         type: FieldType.number,
         initialValue: item?.hourlyRate ?? 3000,
         validators: [V.integer(min: 500, max: 100000, label: 'Ставка')],
-        serverError: _serverErrors['hourlyRate'],
         width: 220,
       ),
       FieldSpec(
         name: 'hallIds',
+        serverError: _serverErrors['hallIds'],
         label: 'Работает в залах',
         type: FieldType.multiselect,
         initialValue: item?.hallIds ?? const [],
@@ -115,16 +127,15 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
           (value) =>
               value == null || value == '' ? 'Выберите хотя бы один зал' : null
         ],
-        serverError: _serverErrors['hallIds'],
       ),
       FieldSpec(
         name: 'bio',
+        serverError: _serverErrors['bio'],
         label: 'О себе',
         type: FieldType.multiline,
         initialValue: item?.bio ?? '',
         hint: 'Необязательно',
         validators: [V.length(max: 500)],
-        serverError: _serverErrors['bio'],
       ),
     ];
   }
@@ -177,7 +188,6 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
   }
 
   void _cancel() {
-    _dirty = false;
     context.go('/photographers');
   }
 
@@ -185,29 +195,35 @@ class _PhotographerFormScreenState extends State<PhotographerFormScreen> {
   Widget build(BuildContext context) {
     final catalog = context.watch<CatalogNotifier>();
     return DirtyGuard(
-      dirty: _dirty,
+      isDirty: () => _dirty,
+      fallbackLocation: '/photographers',
       message: 'Есть несохранённые изменения. Выйти без сохранения?',
       child: Scaffold(
         appBar: AppBar(
+          leading: BackButton(onPressed: () => context.go('/photographers')),
           title: Text(_photographer == null
               ? 'Новый фотограф'
               : 'Редактирование фотографа'),
         ),
         body: _loading
             ? const Center(child: CircularProgressIndicator())
-            : EntityForm(
-                key: _entityFormKey,
-                formKey: _formKey,
-                fields: _fields(catalog),
-                rebuildToken: _revision,
-                saveLabel: _photographer == null
-                    ? 'Создать фотографа'
-                    : 'Сохранить изменения',
-                saving: _saving,
-                onSubmit: _save,
-                onCancel: _cancel,
-                onChanged: () => _dirty = true,
-              ),
+            : _loadError != null
+                ? ErrorView(message: _loadError!, onRetry: _load)
+                : widget.id != null && _photographer == null
+                    ? const Center(child: Text('Запись не найдена'))
+                    : EntityForm(
+                        key: _entityFormKey,
+                        formKey: _formKey,
+                        saving: _saving,
+                        fields: _fields(catalog),
+                        rebuildToken: _revision,
+                        saveLabel: _photographer == null
+                            ? 'Создать фотографа'
+                            : 'Сохранить изменения',
+                        onSubmit: _save,
+                        onCancel: _cancel,
+                        onChanged: () => setState(() => _dirty = true),
+                      ),
       ),
     );
   }

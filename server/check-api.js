@@ -16,8 +16,9 @@
 
 'use strict';
 
-const BASE = 'http://localhost:8080/api';
+const BASE = process.env.API_BASE_URL || 'http://localhost:8080/api';
 
+let defaultToken;
 let passed = 0;
 let failed = 0;
 
@@ -32,11 +33,12 @@ function check(name, condition, detail) {
 }
 
 async function req(path, options = {}) {
+  const authToken = Object.hasOwn(options, 'token') ? options.token : defaultToken;
   const response = await fetch(`${BASE}${path}`, {
     method: options.method || 'GET',
     headers: {
       'Content-Type': 'application/json',
-      ...(options.token ? { Authorization: `Bearer ${options.token}` } : {}),
+      ...(authToken ? { Authorization: `Bearer ${authToken}` } : {}),
     },
     body: options.body ? JSON.stringify(options.body) : undefined,
   });
@@ -66,12 +68,13 @@ async function main() {
 
   const login = await req('/auth/login', {
     method: 'POST',
-    body: { username: 'manager', password: 'manager123' },
+    body: { username: 'admin', password: 'admin123' },
   });
-  check('вход менеджера даёт 200', login.status === 200, `статус ${login.status}`);
+  check('вход администратора даёт 200', login.status === 200, `статус ${login.status}`);
   const token = login.data && login.data.accessToken;
+  defaultToken = token;
   check('вход возвращает accessToken', Boolean(token));
-  check('вход возвращает профиль пользователя', login.data?.user?.role === 'manager');
+  check('вход возвращает профиль пользователя', login.data?.user?.role === 'admin');
 
   const clientLogin = await req('/auth/login', {
     method: 'POST',
@@ -118,12 +121,12 @@ async function main() {
   );
 
   console.log('\n=== 4. Права доступа ===');
-  const anonymous = await req('/halls');
-  check('чтение каталога без токена разрешено', anonymous.status === 200, `статус ${anonymous.status}`);
+  const anonymous = await req('/halls', {token: null});
+  check('чтение каталога без токена запрещено', anonymous.status === 401, `статус ${anonymous.status}`);
 
   const anonymousWrite = await req('/halls', {
     method: 'POST',
-    body: { name: 'X', code: 'X-1', style: 'Лофт', capacity: 1, hourlyRate: 1 },
+    body: { name: 'X', code: 'X-1', style: 'Лофт', capacity: 1, hourlyRate: 1 }, token: null,
   });
   check('создание без токена даёт 401', anonymousWrite.status === 401, `статус ${anonymousWrite.status}`);
 
@@ -257,7 +260,7 @@ async function main() {
       accessCode: 'CHK-001',
       hallId: sample.id,
       clientId,
-      photographerIds: [],
+      photographerIds: [1],
       date: today,
       durationHours: 2,
       participants: 2,
@@ -273,7 +276,7 @@ async function main() {
       accessCode: 'CHK-002',
       hallId: sample.id,
       clientId,
-      photographerIds: [],
+      photographerIds: [1],
       date: today,
       durationHours: 2,
       participants: 2,
@@ -293,7 +296,7 @@ async function main() {
   const reset = await req('/__reset', { method: 'POST' });
   check('сброс данных даёт 200', reset.status === 200);
   const afterReset = await req('/halls?size=100', { token });
-  check('после сброса залов снова 8', afterReset.data?.total === 8, `пришло ${afterReset.data?.total}`);
+  check('после сброса восстановлены залы ПР3', afterReset.data?.total === require('./seed-pr3.json').halls.length, `пришло ${afterReset.data?.total}`);
 
   console.log(`\n=== Итог: успешно ${passed}, неудачно ${failed} ===\n`);
   process.exit(failed === 0 ? 0 : 1);

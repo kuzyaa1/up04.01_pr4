@@ -2,11 +2,11 @@
 /**
  * Мок-сервер учебного API «Фотостудия FocusFrame».
  *
- * Реализует контракт, согласованный с учебным API «Библиотека»:
+ * REST API для системы бронирования фотостудии:
  *   - адрес:            http://localhost:8080/api
  *   - пагинация:        { items, page, size, total, totalPages }
  *   - ошибки:           { message } и { message, errors } для 422
- *   - роли:             reader / photographer / manager / admin
+ *   - роли:             client / photographer / manager / admin
  *   - CORS:             разрешённый источник + обработчик OPTIONS
  *
  * Зависимостей нет — нужен только Node.js 18 или новее.
@@ -26,6 +26,8 @@
 
 const http = require('node:http');
 const crypto = require('node:crypto');
+const fs = require('node:fs');
+const nodePath = require('node:path');
 
 // ─────────────────────────── параметры запуска ───────────────────────────
 
@@ -36,10 +38,11 @@ function arg(name, fallback) {
 }
 
 const PORT = Number(arg('port', 8080));
-const ORIGIN = arg('origin', '*');
+const ORIGIN = arg('origin', 'http://localhost:5555');
 const SECRET = 'учебный-ключ-фотостудии-не-для-продакшена';
 const ACCESS_TTL = Number(arg('ttl', 900)); // секунд
 const REFRESH_TTL = 60 * 60 * 24 * 7;
+const SESSION_TTL = Number(arg('session-ttl', 1800));
 
 // ─────────────────────────────── токены ───────────────────────────────
 
@@ -101,84 +104,21 @@ function seed() {
     bookings: [],
     users: [],
     refreshTokens: new Set(),
+    revokedSessions: new Set(),
   };
 
-  // ── Залы студии ──
-  const H = (name, code, style, capacity, hourlyRate, description) =>
-    push('halls', { name, code, style, capacity, hourlyRate, description });
-
-  const whiteCyclorama = H('Белая циклорама', 'A-01', 'Циклорама', 8, 2500, 'Зал с белым циклорамным фоном');
-  const loftFactory = H('Loft Factory', 'A-02', 'Лофт', 12, 3200, 'Индустриальный лофт с кирпичной стеной');
-  const scandinavia = H('Скандинавия', 'B-01', 'Интерьерный', 6, 2800, 'Светлый зал в скандинавском стиле');
-  const blackRoom = H('Black Room', 'B-02', 'Тёмный зал', 5, 2700, 'Полностью чёрный зал для драматичных кадров');
-  const greenhouse = H('Оранжерея', 'C-01', 'Дневной свет', 10, 3500, 'Зал с растениями и мягким дневным светом');
-  const minimal = H('Minimal', 'C-02', 'Циклорама', 4, 2100, 'Минималистичный зал в оттенках серого');
-  const brickMetal = H('Кирпич и металл', 'D-01', 'Лофт', 14, 3900, 'Зал с кирпичными стенами и металлическими фермами');
-  const daylight = H('Daylight', 'D-02', 'Дневной свет', 16, 4200, 'Просторный зал с панорамными окнами');
-
-  // ── Фотографы ──
-  const P = (fullName, specialization, city, birthYear, experienceYears, hourlyRate) =>
-    push('photographers', { fullName, specialization, city, birthYear, experienceYears, hourlyRate });
-
-  const tolstoy = P('Иванова Мария Петровна', 'Портрет', 'Москва', 1988, 12, 4500);
-  const sidorov = P('Сидоров Алексей Николаевич', 'Семейная съёмка', 'Москва', 1990, 9, 3800);
-  const kuznetsova = P('Кузнецова Ольга Викторовна', 'Предметная съёмка', 'Санкт-Петербург', 1985, 15, 5200);
-  const orlov = P('Орлов Деник Сергеевич', 'Fashion', 'Москва', 1992, 7, 4000);
-  const petrova = P('Петрова Анна Игоревна', 'Контент для брендов', 'Казань', 1987, 11, 4700);
-  const smirnov = P('Смирнов Артём Львович', 'Портрет', 'Москва', 1995, 5, 3200);
-  const voronina = P('Воронина Екатерина Юрьевна', 'Семейная съёмка', 'Екатеринбург', 1991, 8, 3600);
-
-  // ── Оборудование ──
-  const E = (name, category, manufacturer, hallId, quantity, pricePerDay) =>
-    push('equipment', { name, category, manufacturer, hallId, quantity, pricePerDay });
-
-  E('Световой набор Profoto', 'Свет', 'Profoto', whiteCyclorama, 2, 4500);
-  E('Циклорама 6 м', 'Фоны', 'Profoto', whiteCyclorama, 1, 12000);
-  E('Софтбокс 120 см', 'Свет', 'Aputure', loftFactory, 3, 3200);
-  E('Деревянный стол', 'Мебель', 'Икеа', loftFactory, 4, 1800);
-  E('Портретный отражатель', 'Свет', 'Broncolor', scandinavia, 2, 2400);
-  E('Растение в кашпо', 'Реквизит', 'Дом и сад', greenhouse, 6, 900);
-  E('Студийный стол', 'Мебель', 'Икеа', minimal, 1, 2200);
-  E('Фон хром', 'Фоны', 'Fola', minimal, 2, 3800);
-  E('Манекен', 'Реквизит', 'Mannequin', blackRoom, 2, 6500);
-  E('RGB-панель', 'Свет', 'Nanlite', daylight, 4, 5100);
-  E('Кресло', 'Мебель', 'IKEA', daylight, 2, 1500);
-
-  // ── Клиенты ──
-  const C = (fullName, email, phone, clientType, company, cardNumber, issuedAt, expiresAt) =>
-    push('clients', {
-      fullName, email, phone, clientType, company,
-      cardNumber, cardIssuedAt: issuedAt, cardExpiresAt: expiresAt,
-    });
-
-  C('Смирнов Пётр Алексеевич', 'smirnov@example.com', '+7 900 100-10-01', 'Частный', '', 'FF-000001', iso(2026, 1, 15), iso(2027, 1, 15));
-  C('Кузнецова Мария Ивановна', 'kuznetsova@example.com', '+7 900 100-10-02', 'Корпоративный', 'Студия «Кадр»', 'FF-000002', iso(2026, 1, 16), iso(2027, 1, 16));
-  C('Попов Дмитрий Сергеевич', 'popov@example.com', '+7 900 100-10-03', 'Частный', '', 'FF-000003', iso(2026, 1, 17), iso(2027, 1, 17));
-  C('Васильева Елена Олеговна', 'vasileva@example.com', '+7 900 100-10-04', 'Корпоративный', 'Маркетинг-отдел «Вектор»', 'FF-000004', iso(2026, 1, 18), iso(2027, 1, 18));
-  C('Новиков Андрей Викторович', 'novikov@example.com', '+7 900 100-10-05', 'Частный', '', 'FF-000005', iso(2026, 1, 19), iso(2027, 1, 19));
-  C('Морозова Татьяна Николаевна', 'morozova@example.com', '+7 900 100-10-06', 'Корпоративный', 'Агентство «Пятно»', 'FF-000006', iso(2026, 1, 20), iso(2027, 1, 20));
-
-  // ── Бронирования ──
-  // status: active | completed | cancelled
-  const B = (hallId, clientId, photographerIds, date, durationHours, participants, shootingType, comment, status, accessCode) =>
-    push('bookings', {
-      hallId, clientId, photographerIds, date, durationHours, participants,
-      shootingType, comment, status, accessCode,
-    });
-
-  const daysAgo = (n) => new Date(Date.now() - n * 86400000).toISOString();
-  const daysAhead = (n) => new Date(Date.now() + n * 86400000).toISOString();
-
-  B(whiteCyclorama, 1, [tolstoy], daysAgo(20), 3, 2, 'Портрет', 'Предметная съёмка для каталога', 'completed', 'BR-1001');
-  B(loftFactory, 2, [sidorov], daysAgo(5), 4, 8, 'Семейная съёмка', 'Семейный портрет', 'completed', 'BR-1002');
-  B(greenhouse, 3, [petrova], daysAgo(30), 2, 1, 'Контент для брендов', 'Съёмка для соцсетей', 'cancelled', 'BR-1003');
-  B(blackRoom, 4, [kuznetsova], daysAhead(3), 5, 3, 'Fashion', 'Кампейн к весеннему каталогу', 'active', 'BR-1004');
-  B(whiteCyclorama, 1, [tolstoy, smirnov], daysAhead(7), 2, 4, 'Портрет', 'Съёмка резюме', 'active', 'BR-1005');
-  B(scandinavia, 5, [voronina], daysAhead(10), 3, 6, 'Семейная съёмка', 'Юбилей семьи', 'active', 'BR-1006');
-  B(daylight, 2, [orlov], daysAhead(14), 6, 10, 'Fashion', 'Показ коллекции', 'active', 'BR-1007');
-  B(minimal, 3, [kuznetsova], daysAgo(2), 1, 1, 'Предметная съёмка', 'Кадры для маркетплейса', 'active', 'BR-1008');
-  B(brickMetal, 6, [petrova, sidorov], daysAhead(21), 4, 12, 'Контент для брендов', 'Съёмка интерьера офиса', 'active', 'BR-1009');
-  B(greenhouse, 1, [smirnov], daysAhead(28), 2, 2, 'Портрет', 'Портрет в естественном свете', 'active', 'BR-1010');
+  const fixtures = require('./seed-pr3.json');
+  for (const collection of COLLECTIONS) {
+    db[collection] = fixtures[collection].map(row => ({
+      ...normalize(collection, {
+        ...row,
+        fullName: row.fullName || row.name || [row.lastName, row.firstName].filter(Boolean).join(' '),
+        city: row.city || row.bio || '',
+      }),
+      id: row.id, createdAt: new Date().toISOString(), deletedAt: row.deletedAt || null,
+    }));
+    db.seq[collection] = Math.max(0, ...db[collection].map(row => row.id));
+  }
 
   // ── Пользователи ──
   push('users', {
@@ -221,7 +161,8 @@ function expandHall(h) {
     equipmentIds: db.equipment
       .filter((e) => e.hallId === h.id && !e.deletedAt)
       .map((e) => e.id),
-    photographerIds: uniquePhotographers,
+    photographerIds: [...new Set([...uniquePhotographers, ...db.photographers.filter(p => !p.deletedAt && (p.hallIds || []).includes(h.id)).map(p => p.id)])],
+    bookingIds: db.bookings.filter(b => b.hallId === h.id && !b.deletedAt).map(b => b.id),
     activeBookings: db.bookings.filter(
       (b) => b.hallId === h.id && b.status === 'active' && !b.deletedAt,
     ).length,
@@ -242,6 +183,7 @@ function expandPhotographer(p) {
     birthYear: p.birthYear,
     experienceYears: p.experienceYears,
     hourlyRate: p.hourlyRate,
+    hallIds: p.hallIds || [],
     bookingIds: bookings.map((b) => b.id),
     activeBookings: bookings.filter((b) => b.status === 'active').length,
     createdAt: p.createdAt,
@@ -258,6 +200,7 @@ function expandClient(c) {
     phone: c.phone,
     clientType: c.clientType,
     company: c.company,
+    notes: c.notes || '',
     card: c.cardNumber
       ? {
           number: c.cardNumber,
@@ -293,6 +236,7 @@ function expandBooking(b) {
   return {
     id: b.id,
     accessCode: b.accessCode,
+    email: b.email || client?.email || '',
     hall: hall ? { id: hall.id, name: hall.name, code: hall.code } : null,
     client: client ? { id: client.id, fullName: client.fullName } : null,
     photographerIds: b.photographerIds,
@@ -363,6 +307,7 @@ function applyFilters(collection, rows, q) {
   }
 
   if (collection === 'photographers') {
+    if (q.hallId) result = result.filter(p => (p.hallIds || []).includes(Number(q.hallId)));
     if (q.specialization) {
       result = result.filter((p) => p.specialization === q.specialization);
     }
@@ -453,8 +398,16 @@ function applySort(rows, sort) {
   const [field, dirRaw] = String(sort).split(',');
   const dir = (dirRaw || 'asc').toLowerCase() === 'desc' ? -1 : 1;
   return [...rows].sort((a, b) => {
-    const av = a[field];
-    const bv = b[field];
+    const value = row => {
+      if (field === 'name' && row.fullName != null) return row.fullName;
+      if (field === 'lastName') return (row.fullName || '').split(/\s+/)[0];
+      if (field === 'firstName') return (row.fullName || '').split(/\s+/).slice(1).join(' ');
+      if (field === 'clientName') return db.clients.find(c => c.id === row.clientId)?.fullName || '';
+      if (field === 'total') return row.durationHours * (db.halls.find(h => h.id === row.hallId)?.hourlyRate || 0);
+      return row[field];
+    };
+    const av = value(a);
+    const bv = value(b);
     if (av == null && bv == null) return 0;
     if (av == null) return 1;
     if (bv == null) return -1;
@@ -509,6 +462,7 @@ function validate(collection, body, id = null) {
   }
 
   if (collection === 'photographers') {
+    if (body.hallIds != null && (!Array.isArray(body.hallIds) || body.hallIds.some(id => !db.halls.some(h => h.id === Number(id) && !h.deletedAt)))) e.hallIds = 'Выберите существующие залы';
     if (!str(body.fullName)) e.fullName = 'Укажите ФИО фотографа';
     if (!str(body.specialization)) e.specialization = 'Укажите специализацию';
     if (body.experienceYears != null) {
@@ -555,7 +509,7 @@ function validate(collection, body, id = null) {
     if (!str(body.name)) e.name = 'Укажите название оборудования';
     else if (str(body.name).length > 120) e.name = 'Не длиннее 120 символов';
     if (!str(body.category)) e.category = 'Укажите категорию';
-    if (body.hallId != null && !db.halls.find((h) => h.id === Number(body.hallId) && !h.deletedAt)) {
+    if (!db.halls.find((h) => h.id === Number(body.hallId) && !h.deletedAt)) {
       e.hallId = 'Зал не найден';
     }
     const quantity = Number(body.quantity);
@@ -578,13 +532,14 @@ function validate(collection, body, id = null) {
       if (dup) e.accessCode = 'Бронирование с таким кодом уже существует';
     }
 
-    if (body.hallId != null && !db.halls.find((h) => h.id === Number(body.hallId) && !h.deletedAt)) {
+    if (!db.halls.find((h) => h.id === Number(body.hallId) && !h.deletedAt)) {
       e.hallId = 'Зал не найден';
     }
-    if (body.clientId != null && !db.clients.find((c) => c.id === Number(body.clientId) && !c.deletedAt)) {
+    if (!db.clients.find((c) => c.id === Number(body.clientId) && !c.deletedAt)) {
       e.clientId = 'Клиент не найден';
     }
 
+    if (!body.date) e.date = 'Укажите дату съёмки';
     if (body.date) {
       const d = Date.parse(body.date);
       if (Number.isNaN(d)) e.date = 'Некорректная дата съёмки';
@@ -600,9 +555,43 @@ function validate(collection, body, id = null) {
       e.participants = 'Участников должно быть не меньше одного';
     }
 
+    const hall = db.halls.find(h => h.id === Number(body.hallId));
+    if (hall && participants > hall.capacity) e.participants = 'Количество участников превышает вместимость зала';
+    if (body.email && !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(str(body.email))) e.email = 'Некорректный адрес почты';
+    if (body.photographerIds != null && (!Array.isArray(body.photographerIds) || body.photographerIds.some(id => !db.photographers.some(p => p.id === Number(id) && !p.deletedAt)))) e.photographerIds = 'Фотограф не найден';
     if (!str(body.shootingType)) e.shootingType = 'Укажите тип съёмки';
   }
 
+  const unique = (field, value, label, key = field) => {
+    if (value && db[collection].some(row => row.id !== id && !row.deletedAt && String(row[field] || '').trim().toLowerCase() === String(value).trim().toLowerCase())) e[key] = label;
+  };
+  const dateValid = text => typeof text === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(text) && !Number.isNaN(Date.parse(text)) && new Date(text).toISOString().slice(0, 10) === text;
+  if (collection === 'photographers') {
+    unique('fullName', str(body.fullName), 'Фотограф с таким ФИО уже есть');
+    if (id && db.bookings.some(b => !b.deletedAt && b.photographerIds.includes(id) && !(body.hallIds || []).map(Number).includes(b.hallId))) e.hallIds = 'Нельзя убрать зал с действующими бронированиями фотографа';
+  }
+  if (collection === 'equipment') {
+    if (db.equipment.some(row => row.id !== id && !row.deletedAt && row.hallId === Number(body.hallId) && row.name.toLowerCase() === str(body.name).toLowerCase())) e.name = 'Оборудование с таким названием уже есть в этом зале';
+  }
+  if (collection === 'clients') {
+    const digits = v => String(v || '').replace(/\D/g, '');
+    if (body.phone && db.clients.some(c => c.id !== id && !c.deletedAt && digits(c.phone) === digits(body.phone))) e.phone = 'Клиент с таким телефоном уже есть';
+    for (const field of ['cardIssuedAt', 'cardExpiresAt']) {
+      if (body[field] && !dateValid(body[field])) e[field] = 'Некорректная календарная дата';
+    }
+    if (body.cardNumber && !body.cardIssuedAt) e.cardIssuedAt = 'Укажите дату выдачи абонемента';
+    if (body.cardIssuedAt && body.cardExpiresAt && body.cardIssuedAt > body.cardExpiresAt) e.cardExpiresAt = 'Окончание не раньше даты выдачи';
+  }
+  if (collection === 'bookings') {
+    if (!/^[A-Za-z0-9-]{6,40}$/.test(str(body.accessCode))) e.accessCode = 'Код: латиница, цифры и дефис, от 6 до 40 символов';
+    const rawDate = typeof body.date === 'string' ? body.date.slice(0, 10) : '';
+    if (!dateValid(rawDate)) e.date = 'Некорректная календарная дата';
+    if (!Array.isArray(body.photographerIds) || !body.photographerIds.length) e.photographerIds = 'Выберите хотя бы одного фотографа';
+    else if (body.photographerIds.some(id => {
+      const person = db.photographers.find(p => p.id === Number(id) && !p.deletedAt);
+      return !person || (person.hallIds?.length && !person.hallIds.includes(Number(body.hallId)));
+    })) e.photographerIds = 'Фотограф недоступен в выбранном зале';
+  }
   return e;
 }
 
@@ -650,7 +639,7 @@ function currentUser(req) {
   const header = req.headers['authorization'] || '';
   if (!header.startsWith('Bearer ')) return null;
   const payload = verify(header.slice(7));
-  if (!payload || payload.type !== 'access') return null;
+  if (!payload || payload.type !== 'access' || db.revokedSessions.has(payload.sid) || (payload.startedAt && Math.floor(Date.now()/1000) - payload.startedAt >= SESSION_TTL)) return null;
   return db.users.find((u) => u.id === payload.sub && !u.deletedAt) || null;
 }
 
@@ -666,6 +655,14 @@ function requireRole(res, user, minRole) {
     return false;
   }
   return true;
+}
+
+function requireEntityWrite(res, user, collection, hard = false) {
+  if (!user) { fail(res, 401, 'Требуется вход в систему'); return false; }
+  if (user.role === 'admin') return true;
+  if (!hard && user.role === 'manager' && ['bookings', 'clients'].includes(collection)) return true;
+  fail(res, 403, hard ? 'Физическое удаление доступно только администратору' : 'Изменение этого справочника доступно только администратору');
+  return false;
 }
 
 const COLLECTIONS = ['halls', 'photographers', 'clients', 'equipment', 'bookings'];
@@ -685,6 +682,7 @@ async function handle(req, res, url) {
 
   // ── служебные ──
   if (path === '/api/__reset' && method === 'POST') {
+    if (!requireRole(res, user, 'admin')) return;
     seed();
     return send(res, 200, { message: 'Данные восстановлены в исходное состояние' });
   }
@@ -750,6 +748,10 @@ async function handle(req, res, url) {
     else if (db.users.find((u) => u.username === username)) errors.username = 'Такой логин уже занят';
     if (password.length < 8) errors.password = 'Пароль не короче восьми символов';
     else if (!/\d/.test(password)) errors.password = 'Пароль должен содержать цифру';
+    else if (!/[^\p{L}\p{N}\s]/u.test(password)) errors.password = 'Пароль должен содержать специальный символ';
+    if (!String(body.fullName || '').trim()) errors.fullName = 'Укажите имя';
+    if (!String(body.email || '').trim()) errors.email = 'Укажите почту';
+    else if (db.users.some(u => u.email.toLowerCase() === String(body.email).trim().toLowerCase())) errors.email = 'Пользователь с такой почтой уже есть';
     if (body.email && !/^[\w.+-]+@[\w-]+\.[\w.-]+$/.test(String(body.email))) {
       errors.email = 'Некорректный адрес почты';
     }
@@ -758,13 +760,14 @@ async function handle(req, res, url) {
       return send(res, 422, { message: 'Ошибка валидации', errors });
     }
 
+    const clientId = push('clients', normalize('clients', {fullName: body.fullName, email: String(body.email).trim(), clientType: 'Частный'}));
     const id = push('users', {
       username,
       passwordHash: hash(password),
       fullName: String(body.fullName || username),
       email: String(body.email || ''),
       role: 'client',
-      clientId: null,
+      clientId,
     });
     return send(res, 201, expandUser(db.users.find((u) => u.id === id)));
   }
@@ -781,8 +784,9 @@ async function handle(req, res, url) {
     }
 
     const now = Math.floor(Date.now() / 1000);
-    const accessToken = sign({ sub: found.id, role: found.role, type: 'access', exp: now + ACCESS_TTL });
-    const refreshToken = sign({ sub: found.id, type: 'refresh', exp: now + REFRESH_TTL });
+    const sid = crypto.randomUUID();
+    const accessToken = sign({ sub: found.id, role: found.role, type: 'access', sid, startedAt: now, exp: now + ACCESS_TTL });
+    const refreshToken = sign({ sub: found.id, type: 'refresh', sid, startedAt: now, exp: now + REFRESH_TTL });
     db.refreshTokens.add(refreshToken);
 
     return send(res, 200, {
@@ -797,16 +801,16 @@ async function handle(req, res, url) {
     const body = await readBody(req);
     const token = body && body.refreshToken;
     const payload = verify(token);
-    if (!payload || payload.type !== 'refresh' || !db.refreshTokens.has(token)) {
+    if (!payload || payload.type !== 'refresh' || !db.refreshTokens.has(token) || db.revokedSessions.has(payload.sid) || (payload.startedAt && Math.floor(Date.now()/1000) - payload.startedAt >= SESSION_TTL)) {
       return fail(res, 401, 'Токен обновления недействителен');
     }
     const found = db.users.find((u) => u.id === payload.sub);
-    if (!found) return fail(res, 401, 'Пользователь не найден');
+    if (!found || found.deletedAt) return fail(res, 401, 'Пользователь не найден');
 
     db.refreshTokens.delete(token);
     const now = Math.floor(Date.now() / 1000);
-    const accessToken = sign({ sub: found.id, role: found.role, type: 'access', exp: now + ACCESS_TTL });
-    const refreshToken = sign({ sub: found.id, type: 'refresh', exp: now + REFRESH_TTL });
+    const accessToken = sign({ sub: found.id, role: found.role, type: 'access', sid: payload.sid, startedAt: payload.startedAt, exp: now + ACCESS_TTL });
+    const refreshToken = sign({ sub: found.id, type: 'refresh', sid: payload.sid, startedAt: payload.startedAt, exp: now + REFRESH_TTL });
     db.refreshTokens.add(refreshToken);
 
     return send(res, 200, { accessToken, refreshToken, expiresIn: ACCESS_TTL, user: expandUser(found) });
@@ -819,7 +823,11 @@ async function handle(req, res, url) {
 
   if (path === '/api/auth/logout' && method === 'POST') {
     const body = await readBody(req);
-    if (body && body.refreshToken) db.refreshTokens.delete(body.refreshToken);
+    if (body && body.refreshToken) {
+      const payload = verify(body.refreshToken);
+      if (payload?.sid) db.revokedSessions.add(payload.sid);
+      db.refreshTokens.delete(body.refreshToken);
+    }
     return send(res, 204);
   }
 
@@ -831,32 +839,72 @@ async function handle(req, res, url) {
     return send(res, 200, { ...page, items: page.items.map(expandUser) });
   }
 
+  // Role-specific workspaces. Roles are read from the server user record.
+  if (path === '/api/account/bookings' && method === 'GET') {
+    if (!user) return fail(res, 401, 'Требуется вход');
+    if (user.role !== 'client') return fail(res, 403, 'Личный кабинет доступен клиенту');
+    return send(res, 200, db.bookings.filter(b => b.clientId === user.clientId && !b.deletedAt).map(expandBooking));
+  }
+  if (path === '/api/manager/workspace' && method === 'GET') {
+    if (!user) return fail(res, 401, 'Требуется вход');
+    if (user.role !== 'manager') return fail(res, 403, 'Рабочее место доступно менеджеру');
+    return send(res, 200, {activeBookings: db.bookings.filter(b => !b.deletedAt && b.status === 'active').length,
+      clients: db.clients.filter(c => !c.deletedAt).length,
+      halls: db.halls.filter(h => !h.deletedAt).length});
+  }
+  if (path === '/api/admin/statistics' && method === 'GET') {
+    if (!requireRole(res, user, 'admin')) return;
+    return send(res, 200, {users: db.users.filter(u => !u.deletedAt).length,
+      halls: db.halls.filter(h => !h.deletedAt).length, clients: db.clients.filter(c => !c.deletedAt).length,
+      bookings: db.bookings.filter(b => !b.deletedAt).length,
+      activeBookings: db.bookings.filter(b => !b.deletedAt && b.status === 'active').length,
+      deletedRecords: COLLECTIONS.reduce((n,c) => n+db[c].filter(r => r.deletedAt).length,0)});
+  }
+  const roleChange = path.match(/^\/api\/users\/(\d+)\/role$/);
+  if (roleChange && method === 'PATCH') {
+    if (!requireRole(res, user, 'admin')) return;
+    const target = db.users.find(u => u.id === Number(roleChange[1]) && !u.deletedAt);
+    if (!target) return fail(res, 404, 'Пользователь не найден');
+    const body = await readBody(req);
+    if (!body || !Object.hasOwn(ROLE_LEVEL, body.role)) return send(res, 422, {message: 'Ошибка валидации', errors: {role: 'Неизвестная роль'}});
+    if (target.id === user.id && body.role !== 'admin') return fail(res, 409, 'Нельзя понизить собственную роль администратора');
+    if (body.role === 'client' && !target.clientId) target.clientId = push('clients', normalize('clients', {fullName: target.fullName, email: target.email, clientType: 'Частный'}));
+    target.role = body.role;
+    return send(res, 200, expandUser(target));
+  }
+  const extension = path.match(/^\/api\/bookings\/(\d+)\/extend$/);
+  if (extension && method === 'POST') {
+    if (!user) return fail(res, 401, 'Требуется вход');
+    if (user.role !== 'client') return fail(res, 403, 'Продление доступно клиенту в личном кабинете');
+    const row = db.bookings.find(b => b.id === Number(extension[1]) && !b.deletedAt);
+    if (!row) return fail(res, 404, 'Бронирование не найдено');
+    if (row.clientId !== user.clientId) return fail(res, 403, 'Нельзя продлить чужую бронь');
+    if (row.status !== 'active' || row.durationHours >= 24) return fail(res, 409, 'Эту бронь нельзя продлить');
+    row.durationHours += 1;
+    return send(res, 200, expandBooking(row));
+  }
+
   // ── специальные операции с бронированиями ──
   if (path === '/api/bookings' && method === 'POST') {
-    if (!requireRole(res, user, 'manager')) return;
+    if (!user) return fail(res, 401, 'Требуется вход в систему');
+    if (!['client','manager','admin'].includes(user.role)) return fail(res, 403, 'Создание брони недоступно вашей роли');
     const body = await readBody(req);
     if (!body) return fail(res, 400, 'Тело запроса не является корректным JSON');
-
-    const errors = {};
-    const client = db.clients.find((c) => c.id === Number(body.clientId) && !c.deletedAt);
-    const hall = db.halls.find((h) => h.id === Number(body.hallId) && !h.deletedAt);
-    if (!client) errors.clientId = 'Клиент не найден';
-    if (!hall) errors.hallId = 'Зал не найден';
-    if (Object.keys(errors).length) {
-      return send(res, 422, { message: 'Ошибка валидации', errors });
+    if (user.role === 'client') {
+      if (!user.clientId) return fail(res, 403, 'Аккаунт не связан с профилем клиента');
+      if (body.clientId != null && Number(body.clientId) !== 0 && Number(body.clientId) !== user.clientId) return fail(res, 403, 'Можно бронировать только от своего имени');
+      body.clientId = user.clientId;
+      body.accessCode = 'BR-' + crypto.randomUUID().toUpperCase();
+      body.status = 'active';
+      body.email = body.email || user.email;
+      const today = new Intl.DateTimeFormat('sv-SE', {timeZone:'Europe/Moscow'}).format(new Date());
+      if (typeof body.date === 'string' && body.date.slice(0,10) < today) return send(res, 422, {message:'Ошибка валидации', errors:{date:'Нельзя бронировать прошедшую дату'}});
     }
 
-    // Конфликт: в зале уже стоит бронирование на ту же дату.
-    const sameDay = db.bookings.some(
-      (b) =>
-        b.hallId === hall.id &&
-        b.status === 'active' &&
-        !b.deletedAt &&
-        new Date(b.date).toDateString() === new Date(body.date).toDateString(),
-    );
-    if (sameDay) {
-      return fail(res, 409, 'На эту дату в зале уже есть активное бронирование');
-    }
+    const errors = validate('bookings', body);
+    if (Object.keys(errors).length) return send(res, 422, { message: 'Ошибка валидации', errors });
+    const conflict = bookingConflict(body);
+    if (conflict) return fail(res, 409, conflict);
 
     const id = push('bookings', normalize('bookings', body));
     return send(res, 201, expandBooking(db.bookings.find((b) => b.id === id)));
@@ -892,7 +940,8 @@ async function handle(req, res, url) {
   if (bulk && method === 'POST') {
     const collection = bulk[1];
     if (!COLLECTIONS.includes(collection)) return fail(res, 404, 'Ресурс не найден');
-    if (!requireRole(res, user, 'manager')) return;
+    const hard = q.hard === 'true';
+    if (!requireEntityWrite(res, user, collection, hard)) return;
 
     const body = await readBody(req);
     const ids = Array.isArray(body && body.ids) ? body.ids.map(Number) : [];
@@ -903,6 +952,13 @@ async function handle(req, res, url) {
       });
     }
 
+    const conflict = deletionConflict(collection, ids, hard);
+    if (conflict) return fail(res, 409, conflict);
+    if (hard) {
+      const before = db[collection].length;
+      db[collection] = db[collection].filter(row => !ids.includes(row.id));
+      return send(res, 200, { deleted: before - db[collection].length });
+    }
     let deleted = 0;
     for (const row of db[collection]) {
       if (ids.includes(row.id) && !row.deletedAt) {
@@ -922,12 +978,20 @@ async function handle(req, res, url) {
 
     if (!COLLECTIONS.includes(collection)) return fail(res, 404, 'Ресурс не найден');
     const expand = EXPANDERS[collection];
+    if (!user) return fail(res, 401, 'Требуется вход в систему');
+    if (collection === 'clients' && !requireRole(res, user, 'manager')) return;
 
     // восстановление
     if (action === 'restore' && method === 'POST') {
       if (!requireRole(res, user, 'admin')) return;
       const row = db[collection].find((x) => x.id === id);
       if (!row) return fail(res, 404, 'Объект не найден');
+      const errors = validate(collection, row, id);
+      if (Object.keys(errors).length) return send(res, 422, { message: 'Ошибка валидации', errors });
+      if (collection === 'bookings') {
+        const conflict = bookingConflict(row, id);
+        if (conflict) return fail(res, 409, conflict);
+      }
       row.deletedAt = null;
       return send(res, 200, expand(row));
     }
@@ -954,12 +1018,13 @@ async function handle(req, res, url) {
         (x) => x.id === id && (q.includeDeleted === 'true' || !x.deletedAt),
       );
       if (!row) return fail(res, 404, 'Объект не найден');
+      if (collection === 'bookings' && user?.role === 'client' && row.clientId !== user.clientId) return fail(res, 403, 'Это бронирование другого клиента');
       return send(res, 200, expand(row));
     }
 
     // создание
     if (id === null && method === 'POST') {
-      if (!requireRole(res, user, 'manager')) return;
+      if (!requireEntityWrite(res, user, collection)) return;
       const body = await readBody(req);
       if (!body) return fail(res, 400, 'Тело запроса не является корректным JSON');
 
@@ -974,7 +1039,7 @@ async function handle(req, res, url) {
 
     // изменение
     if (id !== null && (method === 'PUT' || method === 'PATCH')) {
-      if (!requireRole(res, user, 'manager')) return;
+      if (!requireEntityWrite(res, user, collection)) return;
       const row = db[collection].find((x) => x.id === id && !x.deletedAt);
       if (!row) return fail(res, 404, 'Объект не найден');
 
@@ -987,18 +1052,24 @@ async function handle(req, res, url) {
         return send(res, 422, { message: 'Ошибка валидации', errors });
       }
 
-      Object.assign(row, normalize(collection, merged));
+      if (collection === 'bookings') {
+        const conflict = bookingConflict({ ...merged, status: row.status }, id);
+        if (conflict) return fail(res, 409, conflict);
+      }
+      Object.assign(row, normalize(collection, { ...merged, ...(collection === 'bookings' ? { status: row.status } : {}) }));
       return send(res, 200, expand(row));
     }
 
     // удаление
     if (id !== null && method === 'DELETE') {
       const hard = q.hard === 'true';
-      if (!requireRole(res, user, hard ? 'admin' : 'manager')) return;
+      if (!requireEntityWrite(res, user, collection, hard)) return;
 
       const index = db[collection].findIndex((x) => x.id === id);
       if (index === -1) return fail(res, 404, 'Объект не найден');
 
+      const conflict = deletionConflict(collection, [id], hard);
+      if (conflict) return fail(res, 409, conflict);
       if (hard) {
         if (collection === 'halls') {
           const active = db.bookings.some(
@@ -1023,6 +1094,28 @@ async function handle(req, res, url) {
   return fail(res, 404, `Адрес ${method} ${path} не обслуживается`);
 }
 
+// Формы выбирают дату без времени: один активный заказ на зал в день.
+function bookingConflict(body, id = null) {
+  if (body.status && body.status !== 'active') return null;
+  const day = new Date(body.date).toISOString().slice(0, 10);
+  const others = db.bookings.filter(b => b.id !== id && !b.deletedAt && b.status === 'active' && b.date.slice(0, 10) === day);
+  if (others.some(b => b.hallId === Number(body.hallId))) return 'На эту дату в зале уже есть активное бронирование';
+  if (others.some(b => b.photographerIds.some(id => (body.photographerIds || []).map(Number).includes(id)))) return 'Фотограф уже занят на выбранную дату';
+  return null;
+}
+
+function deletionConflict(collection, ids, hard = false) {
+  const active = row => hard || !row.deletedAt;
+  const bookings = db.bookings.filter(b => active(b) && (
+    collection === 'halls' ? ids.includes(b.hallId) :
+    collection === 'clients' ? ids.includes(b.clientId) :
+    collection === 'photographers' ? b.photographerIds.some(id => ids.includes(id)) : false));
+  const equipment = collection === 'halls' ? db.equipment.filter(e => active(e) && ids.includes(e.hallId)) : [];
+  const people = collection === 'halls' ? db.photographers.filter(p => active(p) && (p.hallIds || []).some(id => ids.includes(id))) : [];
+  return bookings.length + equipment.length + people.length
+    ? `Удаление невозможно: связанных бронирований — ${bookings.length}, оборудования — ${equipment.length}, фотографов — ${people.length}` : null;
+}
+
 function normalize(collection, body) {
   const num = (v) => (v == null || v === '' ? null : Number(v));
   const str = (v) => (v == null ? '' : String(v).trim());
@@ -1042,6 +1135,7 @@ function normalize(collection, body) {
     case 'photographers':
       return {
         fullName: str(body.fullName),
+        hallIds: ids(body.hallIds),
         specialization: str(body.specialization),
         city: str(body.city),
         birthYear: num(body.birthYear),
@@ -1055,6 +1149,7 @@ function normalize(collection, body) {
         phone: str(body.phone),
         clientType: str(body.clientType) || 'Частный',
         company: str(body.company),
+        notes: str(body.notes),
         cardNumber: str(body.cardNumber).toUpperCase(),
         cardIssuedAt: str(body.cardIssuedAt),
         cardExpiresAt: str(body.cardExpiresAt),
@@ -1071,6 +1166,7 @@ function normalize(collection, body) {
     case 'bookings':
       return {
         accessCode: str(body.accessCode).toUpperCase(),
+        email: str(body.email),
         hallId: num(body.hallId),
         clientId: num(body.clientId),
         photographerIds: ids(body.photographerIds),
@@ -1100,6 +1196,29 @@ function expandUser(u) {
 // ─────────────────────────────── запуск ───────────────────────────────
 
 seed();
+const dataFile = nodePath.join(__dirname, '.local-state.json');
+const ephemeral = args.includes('--ephemeral');
+function saveData() {
+  if (ephemeral) return;
+  const state = {...db, refreshTokens: [...db.refreshTokens], revokedSessions: [...db.revokedSessions]};
+  fs.writeFileSync(dataFile + '.tmp', JSON.stringify(state));
+  fs.renameSync(dataFile + '.tmp', dataFile);
+}
+if (!ephemeral && fs.existsSync(dataFile)) {
+  const state = JSON.parse(fs.readFileSync(dataFile, 'utf8'));
+  db = {...state, refreshTokens: new Set(state.refreshTokens || []), revokedSessions: new Set(state.revokedSessions || [])};
+} else if (!ephemeral && arg('import', null)) {
+  const imported = JSON.parse(fs.readFileSync(arg('import'), 'utf8'));
+  for (const collection of COLLECTIONS) {
+    db[collection] = imported[collection].map(row => ({...normalize(collection, {
+      ...row, fullName: row.fullName, hallId: row.hallId ?? row.hall?.id,
+      clientId: row.clientId ?? row.client?.id,
+      cardNumber: row.card?.number, cardIssuedAt: row.card?.issuedAt, cardExpiresAt: row.card?.expiresAt,
+    }), id: row.id, createdAt: row.createdAt, deletedAt: row.deletedAt}));
+    db.seq[collection] = Math.max(0, ...db[collection].map(row => row.id));
+  }
+  saveData();
+}
 
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -1119,6 +1238,7 @@ const server = http.createServer(async (req, res) => {
   const started = Date.now();
   try {
     await handle(req, res, url);
+    if (!['GET','HEAD','OPTIONS'].includes(req.method) && res.statusCode < 400) saveData();
   } catch (err) {
     console.error(err);
     if (!res.headersSent) fail(res, 500, 'Внутренняя ошибка сервера: ' + err.message);

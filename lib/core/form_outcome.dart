@@ -58,6 +58,10 @@ FormOutcome toFormOutcome(Object error) {
 
 /// Показывает сообщение об ошибке в виде всплывающей подсказки.
 void showFormError(BuildContext context, FormOutcome outcome) {
+  if (outcome is FormConflict) {
+    showOperationError(context, ConflictException(outcome.message));
+    return;
+  }
   final message = switch (outcome) {
     FormConflict(:final message) => message,
     FormFailed(:final message) => message,

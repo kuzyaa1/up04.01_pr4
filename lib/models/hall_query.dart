@@ -13,11 +13,6 @@ class HallQuery {
   final int page;
   final int size;
   final bool includeDeleted;
-
-  /// Служебный фильтр: зал, для которого считается число бронирований.
-  /// В адрес страницы не попадает — используется только запросом подсчёта.
-  final int? hallId;
-
   const HallQuery(
       {this.search = '',
       this.style,
@@ -29,8 +24,7 @@ class HallQuery {
       this.sortAscending = true,
       this.page = 1,
       this.size = 10,
-      this.includeDeleted = false,
-      this.hallId});
+      this.includeDeleted = false});
   factory HallQuery.fromUri(Uri uri) {
     final p = uri.queryParameters;
     final sort = (p['sort'] ?? '').split(',');
@@ -77,8 +71,7 @@ class HallQuery {
           bool? sortAscending,
           int? page,
           int? size,
-          bool? includeDeleted,
-          Object? hallId = _unset}) =>
+          bool? includeDeleted}) =>
       HallQuery(
           search: search ?? this.search,
           style: style == _unset ? this.style : style as String?,
@@ -92,8 +85,7 @@ class HallQuery {
           sortAscending: sortAscending ?? this.sortAscending,
           page: page ?? 1,
           size: size ?? this.size,
-          includeDeleted: includeDeleted ?? this.includeDeleted,
-          hallId: hallId == _unset ? this.hallId : hallId as int?);
+          includeDeleted: includeDeleted ?? this.includeDeleted);
   bool get hasActiveFilters =>
       search.isNotEmpty ||
       style != null ||

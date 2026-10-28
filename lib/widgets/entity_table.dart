@@ -25,11 +25,12 @@ class EntityTable<T> extends StatelessWidget {
       this.isDeleted});
   @override
   Widget build(BuildContext context) {
+    final sortIndex = columns.indexWhere((column) => column.$2 == sort);
     return SingleChildScrollView(
       child: SingleChildScrollView(
         scrollDirection: Axis.horizontal,
         child: DataTable(
-          sortColumnIndex: columns.indexWhere((column) => column.$2 == sort),
+          sortColumnIndex: sortIndex < 0 ? null : sortIndex + 1,
           sortAscending: asc,
           columns: [
             const DataColumn(label: Text('')),

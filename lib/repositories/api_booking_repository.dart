@@ -24,11 +24,11 @@ class ApiBookingRepository extends ApiRepository<Booking, BookingQuery>
     final clientData = client is Map<String, dynamic> ? client : const {};
     return Booking(
       id: parseInt(json['id']),
-      clientName: parseString(clientData['fullName']),
-      clientId: parseInt(clientData['id']),
-      email: '',
+      clientName: parseString(clientData['fullName'] ?? json['clientName']),
+      clientId: parseInt(clientData['id'] ?? json['clientId']),
+      email: parseString(json['email'] ?? clientData['email']),
       accessCode: parseString(json['accessCode']),
-      hallId: parseInt(hallData['id']),
+      hallId: parseInt(hallData['id'] ?? json['hallId']),
       photographerIds: parseIntList(json['photographerIds']),
       date: parseDate(json['date']) ?? DateTime.now(),
       durationHours: parseInt(json['durationHours'], fallback: 1),
@@ -42,11 +42,14 @@ class ApiBookingRepository extends ApiRepository<Booking, BookingQuery>
 
   @override
   Map<String, dynamic> toRequestBody(Booking booking) => {
+        'email': booking.email.trim(),
+        'status': booking.status,
         'accessCode': booking.accessCode.trim().toUpperCase(),
         'hallId': booking.hallId,
         'clientId': booking.clientId,
         'photographerIds': booking.photographerIds,
-        'date': booking.date.toUtc().toIso8601String(),
+        'date':
+            '${booking.date.year.toString().padLeft(4, '0')}-${booking.date.month.toString().padLeft(2, '0')}-${booking.date.day.toString().padLeft(2, '0')}',
         'durationHours': booking.durationHours,
         'participants': booking.participants,
         'shootingType': booking.shootingType.trim(),
